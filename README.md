@@ -176,4 +176,4 @@ Current version: **0.1.0** (Initial formalization)
 
 ## License
 
-Private repository. All rights reserved.
+Public repository. All rights reserved.
