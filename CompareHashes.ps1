@@ -1,0 +1,1 @@
+Write-Host 'Compare SHA256SUMS.txt'

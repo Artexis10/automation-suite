@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Data files
+*.csv
+*.xlsx
+*.json
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets
+.env
+*.key
+*.pem
+credentials.json
+secrets/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*~
+
+# Output files (keep structure, not content)
+outputs/*.pdf
+outputs/*.docx
+outputs/*.zip

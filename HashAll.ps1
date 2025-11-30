@@ -1,0 +1,1 @@
+Write-Host 'Generate SHA256SUMS.txt'
