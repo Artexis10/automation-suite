@@ -140,6 +140,15 @@ cd provisioning
 
 # Diff with JSON output
 .\cli.ps1 -Command diff -FileA .\plans\run1.json -FileB .\plans\run2.json -Json
+
+# Restore configuration files (requires explicit opt-in)
+.\cli.ps1 -Command restore -Manifest .\manifests\my-machine.jsonc -EnableRestore
+
+# Restore with dry-run preview
+.\cli.ps1 -Command restore -Manifest .\manifests\my-machine.jsonc -EnableRestore -DryRun
+
+# Apply with restore enabled (installs apps + restores configs)
+.\cli.ps1 -Command apply -Manifest .\manifests\my-machine.jsonc -EnableRestore
 ```
 
 ### Running Tests
@@ -216,6 +225,9 @@ If any of the following change, update this ruleset in the same commit:
 - Test commands
 
 ### Destructive Operations
+- Restore is opt-in: requires `-EnableRestore` flag
+- Backups stored in `provisioning/state/backups/<runId>/` preserving path structure
+- Sensitive paths (.ssh, .aws, credentials, etc.) trigger warnings
 - Must be explicitly opt-in (require flags like `-Force` or `-Confirm`)
 - Must log clearly: `[DESTRUCTIVE] <action>`
 - Must backup before proceeding
