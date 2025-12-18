@@ -16,7 +16,7 @@ This ruleset governs development and operation of the Automation Suite repositor
 | **Plan** | Generated execution steps derived from a manifest, showing exactly what will happen |
 | **State** | Persistent record of previous runs, applied manifests, and checksums for drift detection |
 | **Driver** | Platform-specific adapter for installing software (e.g., winget, apt, brew) |
-| **Restorer** | Module that applies configuration (copy files, symlinks, registry keys) |
+| **Restorer** | Module that applies configuration (copy files, merge JSON/INI, append lines) |
 | **Verifier** | Module that confirms desired state is achieved (file exists, command responds, hash matches) |
 | **Report** | JSON artifact summarizing a run: what was intended, applied, skipped, and failed |
 
@@ -35,8 +35,8 @@ automation-suite/
 │   ├── cli.ps1             # CLI entrypoint
 │   ├── engine/             # Core logic (manifest, plan, apply, verify, state, logging)
 │   ├── drivers/            # Software installers (winget.ps1)
-│   ├── restorers/          # Config restoration (planned)
-│   ├── verifiers/          # State verification (planned)
+│   ├── restorers/          # Config restoration (copy, merge-json, merge-ini, append)
+│   ├── verifiers/          # State verification (file-exists)
 │   ├── manifests/          # User manifest files
 │   ├── plans/              # Generated execution plans
 │   ├── state/              # Run history and checksums
@@ -62,7 +62,7 @@ automation-suite/
 | State persistence | Functional | `provisioning/engine/state.ps1` |
 | Logging | Functional | `provisioning/engine/logging.ps1` |
 | Winget driver | Functional | `provisioning/drivers/winget.ps1` |
-| Restorers | Planned | `provisioning/restorers/` |
+| Restorers (copy, merge, append) | Functional | `provisioning/restorers/` |
 | Verifiers | Functional | `provisioning/verifiers/` |
 | apt/dnf/brew drivers | Planned | `provisioning/drivers/` |
 | Backup Tools | Functional | `backup-tools/` |
@@ -263,7 +263,36 @@ Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
   ],
   
   "restore": [
-    { "type": "copy", "source": "./configs/.gitconfig", "target": "~/.gitconfig", "backup": true }
+    // Copy: simple file/directory copy
+    { "type": "copy", "source": "./configs/.gitconfig", "target": "~/.gitconfig", "backup": true },
+    
+    // JSON merge: deep-merge objects, arrays replace by default
+    {
+      "type": "merge",
+      "format": "json",
+      "source": "./state/capture/vscode/settings.json",
+      "target": "$env:APPDATA/Code/User/settings.json",
+      "backup": true,
+      "arrayStrategy": "replace"  // or "union" for deterministic union
+    },
+    
+    // INI merge: merge sections and keys
+    {
+      "type": "merge",
+      "format": "ini",
+      "source": "./state/capture/app/config.ini",
+      "target": "$env:PROGRAMFILES/App/config.ini",
+      "backup": true
+    },
+    
+    // Append: add missing lines (idempotent)
+    {
+      "type": "append",
+      "source": "./state/capture/gitconfig-extra.txt",
+      "target": "~/.gitconfig",
+      "backup": true,
+      "dedupe": true  // default: true
+    }
   ],
   
   "verify": [
@@ -272,6 +301,33 @@ Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
 }
 ```
 
+### Restore Types
+
+| Type | Format | Description |
+|------|--------|-------------|
+| `copy` | - | Simple file/directory copy (default) |
+| `merge` | `json` | Deep-merge JSON/JSONC files; sorted keys for determinism |
+| `merge` | `ini` | Merge INI sections/keys; preserves keys not in source |
+| `append` | - | Append missing lines to text file; idempotent with dedupe |
+
+### Merge Behavior
+
+**JSON merge:**
+- Objects: deep-merge recursively
+- Arrays: `replace` (default) or `union` (deterministic)
+- Scalars: source overwrites target
+- Output: sorted keys, 2-space indent
+
+**INI merge:**
+- Keys from source overwrite/add into target
+- Existing keys not in source are preserved
+- Comments are NOT preserved (v1 limitation)
+
+**Append:**
+- Adds lines from source not already in target
+- `dedupe: true` (default) removes duplicates
+- Idempotent: re-run produces same result
+
 ---
 
 ## Not Yet Implemented
@@ -279,7 +335,6 @@ Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
 The following are planned but not yet functional:
 
 - **apt/dnf/brew drivers** - Linux/macOS package managers
-- **Restorer modules** - Config file restoration with backup
 - **Verifier modules** - Custom verification beyond file-exists
 - **Report command** - `cli.ps1 -Command report` (shows run history)
 - **Reboot handling** - Automatic reboot detection and `--reboot-if-needed`
