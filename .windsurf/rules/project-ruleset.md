@@ -63,7 +63,7 @@ automation-suite/
 | Logging | Functional | `provisioning/engine/logging.ps1` |
 | Winget driver | Functional | `provisioning/drivers/winget.ps1` |
 | Restorers | Planned | `provisioning/restorers/` |
-| Verifiers | Planned | `provisioning/verifiers/` |
+| Verifiers | Functional | `provisioning/verifiers/` |
 | apt/dnf/brew drivers | Planned | `provisioning/drivers/` |
 | Backup Tools | Functional | `backup-tools/` |
 | Media Tools | Functional | `media-tools/` |
@@ -134,6 +134,12 @@ cd provisioning
 
 # Diagnose environment issues
 .\cli.ps1 -Command doctor
+
+# Compare two plan/run artifacts
+.\cli.ps1 -Command diff -FileA .\plans\run1.json -FileB .\plans\run2.json
+
+# Diff with JSON output
+.\cli.ps1 -Command diff -FileA .\plans\run1.json -FileB .\plans\run2.json -Json
 ```
 
 ### Running Tests
