@@ -23,7 +23,7 @@ Complete index of all scripts in the automation-suite repository.
 
 | Property | Value |
 |----------|-------|
-| **Path** | `Backup Tools/Backup-XMPs.ps1` |
+| **Path** | `backup-tools/Backup-XMPs.ps1` |
 | **Status** | Implemented |
 | **Description** | Backs up XMP sidecar files preserving directory structure using robocopy |
 
@@ -102,7 +102,7 @@ Complete index of all scripts in the automation-suite repository.
 
 | Property | Value |
 |----------|-------|
-| **Path** | `Media Tools/Unsupported Audio Conversion for S95C/Convert-Unsupported-Audio-for-S95C.ps1` |
+| **Path** | `media-tools/unsupported-audio-conversion-for-s95c/Convert-Unsupported-Audio-for-S95C.ps1` |
 | **Status** | Implemented |
 | **Description** | Converts DTS/TrueHD audio in MKV files to FLAC for Samsung S95C compatibility |
 
@@ -158,7 +158,7 @@ Complete index of all scripts in the automation-suite repository.
 
 | Property | Value |
 |----------|-------|
-| **Path** | `Podcast Tools/ExportPodcastTree.ps1` |
+| **Path** | `podcast-tools/ExportPodcastTree.ps1` |
 | **Status** | Implemented |
 | **Description** | Exports podcast folder structure to text file |
 
@@ -185,7 +185,7 @@ Complete index of all scripts in the automation-suite repository.
 
 | Property | Value |
 |----------|-------|
-| **Path** | `YouTube Tools/Live Chat Downloader/download_chats.ps1` |
+| **Path** | `youtube-tools/live-chat-downloader/download_chats.ps1` |
 | **Status** | Implemented |
 | **Description** | Downloads YouTube live chat using chat_downloader |
 
@@ -210,7 +210,7 @@ Complete index of all scripts in the automation-suite repository.
 
 | Property | Value |
 |----------|-------|
-| **Path** | `YouTube Tools/Live Chat Downloader/download_chats_ytdlp.ps1` |
+| **Path** | `youtube-tools/live-chat-downloader/download_chats_ytdlp.ps1` |
 | **Status** | Implemented |
 | **Description** | Downloads YouTube live chat using yt-dlp and converts to formatted text |
 
@@ -243,7 +243,7 @@ Complete index of all scripts in the automation-suite repository.
 
 | Property | Value |
 |----------|-------|
-| **Path** | `Setup/Setup-ArchiveStructure.ps1` |
+| **Path** | `archive-setup/Setup-ArchiveStructure.ps1` |
 | **Status** | Stub |
 | **Description** | Initialize archive folder skeleton |
 

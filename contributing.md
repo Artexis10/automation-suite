@@ -57,11 +57,12 @@ For small fixes or documentation updates, direct commits to `develop` are accept
 ### Scope
 
 Use the tool or folder name:
-- `backup` - Backup Tools
-- `media` - Media Tools
-- `podcast` - Podcast Tools
-- `youtube` - YouTube Tools
-- `setup` - Setup scripts
+- `backup` - backup-tools
+- `media` - media-tools
+- `podcast` - podcast-tools
+- `youtube` - youtube-tools
+- `setup` - archive-setup
+- `provisioning` - provisioning
 - `root` - Root-level files
 
 ### Examples
@@ -129,8 +130,8 @@ param(
 
 ### Folder Naming
 
-- Use Title Case with spaces for tool categories: `Backup Tools`, `Media Tools`
-- Use descriptive names for subfolders: `Live Chat Downloader`
+- Use lowercase kebab-case for all directories: `backup-tools`, `media-tools`
+- Use descriptive kebab-case names for subfolders: `live-chat-downloader`
 
 ---
 
@@ -203,7 +204,7 @@ Update version in:
 
 1. Ensure all changes are committed to `develop`
 2. Update version number
-3. Update `ROADMAP.md` (move completed items)
+3. Update `roadmap.md` (move completed items)
 4. Merge `develop` to `main`
 5. Create git tag
 6. (Optional) Create GitHub release with changelog
@@ -217,7 +218,7 @@ Update version in:
 1. [ ] Create script in appropriate folder
 2. [ ] Add comment-based help
 3. [ ] Update folder `README.md`
-4. [ ] Update `TOOL_INDEX.md`
+4. [ ] Update `tool-index.md`
 5. [ ] Update root `README.md` (tool table)
 6. [ ] Test thoroughly
 7. [ ] Commit with `feat(<scope>): add <tool-name>`
@@ -226,11 +227,12 @@ Update version in:
 
 | Tool Type | Folder |
 |-----------|--------|
-| File backup, hashing, verification | `Backup Tools/` |
-| Photo/video processing | `Media Tools/` |
-| Podcast production | `Podcast Tools/` |
-| YouTube utilities | `YouTube Tools/` |
-| Environment setup | `Setup/` |
+| File backup, hashing, verification | `backup-tools/` |
+| Photo/video processing | `media-tools/` |
+| Podcast production | `podcast-tools/` |
+| YouTube utilities | `youtube-tools/` |
+| Environment setup | `archive-setup/` |
+| Machine provisioning | `provisioning/` |
 | General utilities | Root or new category |
 
 ---

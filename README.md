@@ -25,22 +25,28 @@ This repository consolidates automation tools used across various personal and p
 
 ```
 automation-suite/
-├── Backup Tools/           # File backup, hashing, and integrity verification
+├── backup-tools/           # File backup, hashing, and integrity verification
 │   └── Backup-XMPs.ps1
-├── Media Tools/            # Photo/video processing utilities
-│   └── Unsupported Audio Conversion for S95C/
-├── Podcast Tools/          # Podcast production helpers
+├── media-tools/            # Photo/video processing utilities
+│   └── unsupported-audio-conversion-for-s95c/
+├── podcast-tools/          # Podcast production helpers
 │   └── ExportPodcastTree.ps1
-├── YouTube Tools/          # YouTube content utilities
-│   └── Live Chat Downloader/
-├── Setup/                  # Environment and archive setup scripts
+├── youtube-tools/          # YouTube content utilities
+│   └── live-chat-downloader/
+├── archive-setup/          # Environment and archive setup scripts
 │   └── Setup-ArchiveStructure.ps1
+├── provisioning/           # Machine provisioning and configuration management
+│   ├── cli.ps1
+│   ├── drivers/
+│   ├── restorers/
+│   ├── verifiers/
+│   └── ...
 ├── HashAll.ps1             # (Stub) Generate SHA256 checksums
 ├── CompareHashes.ps1       # (Stub) Compare SHA256 checksum files
 ├── New-TripView.ps1        # (Stub) Create trip view structure
-├── TOOL_INDEX.md           # Complete index of all tools
-├── CONTRIBUTING.md         # Development conventions
-└── ROADMAP.md              # Future development plans
+├── tool-index.md           # Complete index of all tools
+├── contributing.md         # Development conventions
+└── roadmap.md              # Future development plans
 ```
 
 ---
@@ -106,7 +112,7 @@ Tools for file backup, integrity verification, and manifest generation.
 |--------|-------------|
 | `Backup-XMPs.ps1` | Backs up XMP sidecar files preserving directory structure |
 
-See [Backup Tools/README.md](Backup%20Tools/README.md) for details.
+See [backup-tools/readme.md](backup-tools/readme.md) for details.
 
 ### Media Tools
 
@@ -116,7 +122,7 @@ Utilities for photo and video processing.
 |--------|-------------|
 | `Convert-Unsupported-Audio-for-S95C.ps1` | Converts DTS/TrueHD audio to FLAC for Samsung S95C compatibility |
 
-See [Media Tools/README.md](Media%20Tools/README.md) for details.
+See [media-tools/readme.md](media-tools/readme.md) for details.
 
 ### Podcast Tools
 
@@ -126,7 +132,7 @@ Scripts for podcast production workflows.
 |--------|-------------|
 | `ExportPodcastTree.ps1` | Exports podcast folder structure to text file |
 
-See [Podcast Tools/README.md](Podcast%20Tools/README.md) for details.
+See [podcast-tools/readme.md](podcast-tools/readme.md) for details.
 
 ### YouTube Tools
 
@@ -137,9 +143,9 @@ Utilities for YouTube content extraction and processing.
 | `download_chats.ps1` | Downloads live chat using chat_downloader |
 | `download_chats_ytdlp.ps1` | Downloads and converts live chat using yt-dlp |
 
-See [YouTube Tools/README.md](YouTube%20Tools/README.md) for details.
+See [youtube-tools/readme.md](youtube-tools/readme.md) for details.
 
-### Setup
+### Archive Setup
 
 Environment and archive structure initialization.
 
@@ -147,7 +153,22 @@ Environment and archive structure initialization.
 |--------|-------------|
 | `Setup-ArchiveStructure.ps1` | (Stub) Initialize archive folder skeleton |
 
-See [Setup/README.md](Setup/README.md) for details.
+See [archive-setup/readme.md](archive-setup/readme.md) for details.
+
+### Provisioning
+
+Machine provisioning and configuration management — install apps, restore configs, verify state.
+
+Provisioning transforms a machine from an unknown state into a known, verified desired state. It is Windows-first in implementation but platform-agnostic in design via pluggable drivers.
+
+| Component | Description |
+|-----------|-------------|
+| `cli.ps1` | CLI entrypoint (stub) |
+| `drivers/` | Software installation adapters (winget, apt, brew) |
+| `restorers/` | Configuration restoration modules |
+| `verifiers/` | State verification modules |
+
+See [provisioning/readme.md](provisioning/readme.md) for the full manifesto and architecture.
 
 ---
 
@@ -155,9 +176,9 @@ See [Setup/README.md](Setup/README.md) for details.
 
 | Document | Description |
 |----------|-------------|
-| [TOOL_INDEX.md](TOOL_INDEX.md) | Complete index of all scripts with inputs, outputs, and examples |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development conventions, branching, and commit style |
-| [ROADMAP.md](ROADMAP.md) | Planned features and future development |
+| [tool-index.md](tool-index.md) | Complete index of all scripts with inputs, outputs, and examples |
+| [contributing.md](contributing.md) | Development conventions, branching, and commit style |
+| [roadmap.md](roadmap.md) | Planned features and future development |
 
 ---
 

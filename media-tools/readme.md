@@ -8,7 +8,7 @@ Utilities for photo and video processing, format conversion, and media organizat
 
 ### Unsupported Audio Conversion for S95C
 
-Located in: `Unsupported Audio Conversion for S95C/`
+Located in: `unsupported-audio-conversion-for-s95c/`
 
 #### Convert-Unsupported-Audio-for-S95C.ps1
 
@@ -86,7 +86,7 @@ choco install ffmpeg
 
 #### Additional Documentation
 
-See [USAGE_GUIDE.md](Unsupported%20Audio%20Conversion%20for%20S95C/USAGE_GUIDE.md) for detailed usage instructions, troubleshooting, and workflow examples.
+See [usage-guide.md](unsupported-audio-conversion-for-s95c/usage-guide.md) for detailed usage instructions, troubleshooting, and workflow examples.
 
 ---
 

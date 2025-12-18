@@ -1,4 +1,4 @@
-# Setup
+# Archive Setup
 
 Environment and archive structure initialization scripts.
 

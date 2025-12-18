@@ -6,7 +6,7 @@ Utilities for YouTube content extraction and processing, with a focus on live ch
 
 ## Live Chat Downloader
 
-Located in: `Live Chat Downloader/`
+Located in: `live-chat-downloader/`
 
 Tools for downloading and converting YouTube live stream chat replays to readable text format.
 
@@ -149,7 +149,7 @@ pip install chat-downloader
 ## File Structure
 
 ```
-Live Chat Downloader/
+live-chat-downloader/
 ├── download_chats.ps1          # chat_downloader backend
 ├── download_chats_ytdlp.ps1    # yt-dlp backend (recommended)
 ├── urls.txt                    # Input URLs (one per line)

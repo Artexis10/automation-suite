@@ -23,7 +23,7 @@ Future development plans for the automation-suite repository.
 - [ ] SHA256 hash generation (`HashAll.ps1`)
 - [ ] Hash comparison tool (`CompareHashes.ps1`)
 - [ ] Trip view photo organizer (`New-TripView.ps1`)
-- [ ] Archive structure setup (`Setup-ArchiveStructure.ps1`)
+- [ ] Archive structure setup (`archive-setup/Setup-ArchiveStructure.ps1`)
 
 ---
 
@@ -85,12 +85,12 @@ Future development plans for the automation-suite repository.
 
 ### Setup
 
-- **Setup-ArchiveStructure.ps1** - Full implementation
+- **archive-setup/Setup-ArchiveStructure.ps1** - Full implementation
   - Template-based folder creation
   - README generation per folder
   - Configurable structure
 
-- **Setup-Dependencies.ps1** - Automated tool installation
+- **archive-setup/Setup-Dependencies.ps1** - Automated tool installation
   - ffmpeg, yt-dlp, chat_downloader
   - Version checking
   - PATH configuration
@@ -148,8 +148,8 @@ Items under consideration but not yet prioritized:
 - Initial repository formalization
 - Documentation structure established
 - Existing tools documented
-- TOOL_INDEX.md created
-- CONTRIBUTING.md created
+- tool-index.md created
+- contributing.md created
 - Per-folder README files
 
 ---
