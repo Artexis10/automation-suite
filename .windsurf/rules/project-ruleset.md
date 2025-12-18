@@ -131,6 +131,12 @@ cd provisioning
 # Capture minimized (drop entries without stable refs)
 .\cli.ps1 -Command capture -Profile my-machine -Minimize
 
+# Capture with discovery mode (detect non-winget-managed software)
+.\cli.ps1 -Command capture -Profile my-machine -Discover
+
+# Capture with discovery but skip manual include generation
+.\cli.ps1 -Command capture -Profile my-machine -Discover -DiscoverWriteManualInclude $false
+
 # Capture to explicit path (legacy mode, backward compatible)
 .\cli.ps1 -Command capture -OutManifest .\manifests\my-machine.jsonc
 
@@ -176,6 +182,8 @@ cd provisioning
 | `-Minimize` | false | Drop entries without stable refs (no windows ref) |
 | `-IncludeRestoreTemplate` | false | Generate `./includes/<profile>-restore.jsonc` (requires -Profile) |
 | `-IncludeVerifyTemplate` | false | Generate `./includes/<profile>-verify.jsonc` (requires -Profile) |
+| `-Discover` | false | Enable discovery mode: detect software present but not winget-managed |
+| `-DiscoverWriteManualInclude` | true (when -Discover) | Generate `./includes/<profile>-manual.jsonc` with commented suggestions (requires -Profile) |
 
 ### Running Tests
 
@@ -191,6 +199,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-P
 
 # Run capture tests
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Capture.Tests.ps1"
+
+# Run discovery tests
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Discovery.Tests.ps1"
 ```
 
 ### Other Scripts
