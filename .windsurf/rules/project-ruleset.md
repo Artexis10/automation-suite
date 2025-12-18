@@ -38,6 +38,7 @@ automation-suite/
 │   ├── restorers/          # Config restoration (copy, merge-json, merge-ini, append)
 │   ├── verifiers/          # State verification (file-exists)
 │   ├── manifests/          # User manifest files
+│   │   └── includes/       # Template and modular manifest includes
 │   ├── plans/              # Generated execution plans
 │   ├── state/              # Run history and checksums
 │   ├── logs/               # Execution logs
@@ -106,6 +107,7 @@ Every meaningful action must be verifiable. "It ran" is not success—success me
 - Stable manifest hashing (16-char SHA256 prefix)
 - Stable key ordering in JSON reports
 - Reproducible plans given same inputs
+- Capture output sorted alphabetically by app id
 
 ---
 
@@ -117,7 +119,19 @@ Every meaningful action must be verifiable. "It ran" is not success—success me
 # Navigate to provisioning directory
 cd provisioning
 
-# Capture current machine state to manifest
+# Capture current machine state (profile-based, recommended)
+.\cli.ps1 -Command capture -Profile my-machine
+
+# Capture with templates for restore and verify
+.\cli.ps1 -Command capture -Profile my-machine -IncludeRestoreTemplate -IncludeVerifyTemplate
+
+# Capture with all apps (including runtimes and store apps)
+.\cli.ps1 -Command capture -Profile my-machine -IncludeRuntimes -IncludeStoreApps
+
+# Capture minimized (drop entries without stable refs)
+.\cli.ps1 -Command capture -Profile my-machine -Minimize
+
+# Capture to explicit path (legacy mode, backward compatible)
 .\cli.ps1 -Command capture -OutManifest .\manifests\my-machine.jsonc
 
 # Generate plan (preview what would happen)
@@ -151,6 +165,18 @@ cd provisioning
 .\cli.ps1 -Command apply -Manifest .\manifests\my-machine.jsonc -EnableRestore
 ```
 
+### Capture Command Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-Profile <name>` | - | Profile name; writes to `manifests/<name>.jsonc` |
+| `-OutManifest <path>` | - | Explicit output path (overrides -Profile) |
+| `-IncludeRuntimes` | false | Include runtime packages (VCRedist, .NET, UI.Xaml, etc.) |
+| `-IncludeStoreApps` | false | Include Microsoft Store apps (msstore source or 9N*/XP* IDs) |
+| `-Minimize` | false | Drop entries without stable refs (no windows ref) |
+| `-IncludeRestoreTemplate` | false | Generate `./includes/<profile>-restore.jsonc` (requires -Profile) |
+| `-IncludeVerifyTemplate` | false | Generate `./includes/<profile>-verify.jsonc` (requires -Profile) |
+
 ### Running Tests
 
 ```powershell
@@ -162,6 +188,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File provisioning\tests\run-tests.ps1
 
 # Run specific test file
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Plan.Tests.ps1"
+
+# Run capture tests
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Capture.Tests.ps1"
 ```
 
 ### Other Scripts
@@ -205,6 +234,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-P
 - RunId format: `yyyyMMdd-HHmmss`
 - JSON reports: ordered keys (runId, timestamp, manifest, summary, actions)
 - Plans reproducible given same manifest + installed state
+- Capture apps sorted alphabetically by id
 
 ### Logging + Reports
 - All runs produce logs in `provisioning/logs/<runId>.log`
@@ -249,7 +279,10 @@ Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
   "name": "my-workstation",
   "captured": "2025-01-01T00:00:00Z",
   
-  "includes": ["./profiles/dev-tools.jsonc"],  // Optional modular includes
+  "includes": [
+    "./includes/my-workstation-restore.jsonc",
+    "./includes/my-workstation-verify.jsonc"
+  ],
   
   "apps": [
     {
