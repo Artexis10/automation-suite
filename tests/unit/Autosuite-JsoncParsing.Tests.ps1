@@ -7,20 +7,25 @@
     that bypassed the canonical JSONC loader.
 #>
 
-# Resolve paths properly
-$script:TestRoot = $PSScriptRoot
-$script:AutosuiteRoot = (Resolve-Path (Join-Path $script:TestRoot "..\..")).Path
-$script:AutosuiteScript = Join-Path $script:AutosuiteRoot "autosuite.ps1"
-
-# Load autosuite functions without running main logic
-. $script:AutosuiteScript -LoadFunctionsOnly
-
-# Verify AutosuiteRoot was set correctly
-if (-not $script:AutosuiteRoot) {
-    throw "Failed to resolve AutosuiteRoot"
-}
-
 Describe "Autosuite.JsoncParsing.Regression" {
+    
+    BeforeAll {
+        # Resolve paths properly using GetFullPath for reliability
+        $script:TestRoot = $PSScriptRoot
+        $script:AutosuiteRoot = [System.IO.Path]::GetFullPath((Join-Path $script:TestRoot "..\.."))
+        $script:AutosuiteScript = Join-Path $script:AutosuiteRoot "autosuite.ps1"
+
+        # Verify paths exist
+        if (-not (Test-Path $script:AutosuiteRoot)) {
+            throw "AutosuiteRoot does not exist: $script:AutosuiteRoot"
+        }
+        if (-not (Test-Path $script:AutosuiteScript)) {
+            throw "Autosuite script not found: $script:AutosuiteScript"
+        }
+
+        # Load autosuite functions without running main logic
+        . $script:AutosuiteScript -LoadFunctionsOnly
+    }
     
     Context "Read-Manifest function (PS5.1+ compatible)" {
         
@@ -57,20 +62,20 @@ Describe "Autosuite.JsoncParsing.Regression" {
             
             try {
                 # This should NOT throw on PS5.1 or PS7+
-                { Read-Manifest -Path $tempFile } | Should Not Throw
+                { Read-Manifest -Path $tempFile } | Should -Not -Throw
                 
                 $manifest = Read-Manifest -Path $tempFile
                 
                 # Verify parsed correctly
-                $manifest | Should Not BeNullOrEmpty
-                $manifest.version | Should Be 1
-                $manifest.name | Should Be "header-comments-test"
-                $manifest.apps | Should Not BeNullOrEmpty
-                $manifest.apps.Count | Should Be 1
-                $manifest.apps[0].id | Should Be "test-app"
+                $manifest | Should -Not -BeNullOrEmpty
+                $manifest.version | Should -Be 1
+                $manifest.name | Should -Be "header-comments-test"
+                $manifest.apps | Should -Not -BeNullOrEmpty
+                $manifest.apps.Count | Should -Be 1
+                $manifest.apps[0].id | Should -Be "test-app"
                 
                 # Verify we got a hashtable (not PSCustomObject)
-                $manifest | Should BeOfType [hashtable]
+                $manifest | Should -BeOfType [hashtable]
             } finally {
                 if (Test-Path $tempFile) {
                     Remove-Item $tempFile -Force
@@ -100,9 +105,9 @@ Describe "Autosuite.JsoncParsing.Regression" {
             try {
                 $manifest = Read-Manifest -Path $tempFile
                 
-                $manifest | Should Not BeNullOrEmpty
-                $manifest.homepage | Should Be "http://example.com"
-                $manifest.docs | Should Be "https://example.com/docs"
+                $manifest | Should -Not -BeNullOrEmpty
+                $manifest.homepage | Should -Be "http://example.com"
+                $manifest.docs | Should -Be "https://example.com/docs"
             } finally {
                 if (Test-Path $tempFile) {
                     Remove-Item $tempFile -Force
@@ -129,9 +134,9 @@ Describe "Autosuite.JsoncParsing.Regression" {
             try {
                 $manifest = Read-Manifest -Path $tempFile
                 
-                $manifest | Should Not BeNullOrEmpty
-                $manifest.version | Should Be 1
-                $manifest.name | Should Be "test"
+                $manifest | Should -Not -BeNullOrEmpty
+                $manifest.version | Should -Be 1
+                $manifest.name | Should -Be "test"
             } finally {
                 if (Test-Path $tempFile) {
                     Remove-Item $tempFile -Force
@@ -160,9 +165,9 @@ Describe "Autosuite.JsoncParsing.Regression" {
             try {
                 $manifest = Read-Manifest -Path $tempFile
                 
-                $manifest | Should Not BeNullOrEmpty
-                $manifest.version | Should Be 1
-                $manifest.name | Should Be "test"
+                $manifest | Should -Not -BeNullOrEmpty
+                $manifest.version | Should -Be 1
+                $manifest.name | Should -Be "test"
             } finally {
                 if (Test-Path $tempFile) {
                     Remove-Item $tempFile -Force
@@ -193,14 +198,14 @@ Describe "Autosuite.JsoncParsing.Regression" {
             
             try {
                 # Should not throw on either PS version
-                { Read-Manifest -Path $tempFile } | Should Not Throw
+                { Read-Manifest -Path $tempFile } | Should -Not -Throw
                 
                 $manifest = Read-Manifest -Path $tempFile
-                $manifest | Should Not BeNullOrEmpty
-                $manifest.version | Should Be 1
+                $manifest | Should -Not -BeNullOrEmpty
+                $manifest.version | Should -Be 1
                 
                 # Verify we got a hashtable (not PSCustomObject)
-                $manifest | Should BeOfType [hashtable]
+                $manifest | Should -BeOfType [hashtable]
             } finally {
                 if (Test-Path $tempFile) {
                     Remove-Item $tempFile -Force
@@ -215,10 +220,10 @@ Describe "Autosuite.JsoncParsing.Regression" {
             if (Test-Path $fixtureManifest) {
                 $manifest = Read-Manifest -Path $fixtureManifest
                 
-                $manifest | Should Not BeNullOrEmpty
-                $manifest.version | Should Be 1
-                $manifest.name | Should Be "fixture-test"
-                $manifest.apps | Should Not BeNullOrEmpty
+                $manifest | Should -Not -BeNullOrEmpty
+                $manifest.version | Should -Be 1
+                $manifest.name | Should -Be "fixture-test"
+                $manifest.apps | Should -Not -BeNullOrEmpty
             }
         }
     }
