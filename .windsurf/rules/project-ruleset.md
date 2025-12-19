@@ -764,9 +764,9 @@ CLI layer emits stable wrapper lines via `Write-Information -InformationAction C
 ## References
 
 - [provisioning/readme.md](../provisioning/readme.md) - Full provisioning architecture
-- [contributing.md](../contributing.md) - Development conventions
-- [roadmap.md](../roadmap.md) - Future development plans
-- [tool-index.md](../tool-index.md) - Complete script index
+- [CONTRIBUTING.md](../CONTRIBUTING.md) - Development conventions
+- [ROADMAP.md](../ROADMAP.md) - Future development plans
+- [TOOL-INDEX.md](../TOOL-INDEX.md) - Complete script index
 
 
 

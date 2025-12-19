@@ -123,7 +123,7 @@ These tools are secondary to provisioning but follow the same principles (idempo
 | `youtube-tools/` | Live chat download and extraction |
 | `archive-setup/` | Archive folder skeleton initialization |
 
-See [tool-index.md](tool-index.md) for the complete script inventory.
+See [TOOL-INDEX.md](TOOL-INDEX.md) for the complete script inventory.
 
 ---
 
@@ -154,9 +154,9 @@ Get-ChildItem -Recurse -Filter *.ps1 | Unblock-File
 |----------|-------------|
 | [provisioning/README.md](provisioning/README.md) | **Provisioning system contract** — architecture, lifecycle, manifest format |
 | [VISION.md](VISION.md) | Project intent, boundaries, and non-goals |
-| [tool-index.md](tool-index.md) | Complete index of all scripts |
-| [contributing.md](contributing.md) | Development conventions |
-| [roadmap.md](roadmap.md) | Planned development |
+| [TOOL-INDEX.md](TOOL-INDEX.md) | Complete index of all scripts |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development conventions |
+| [ROADMAP.md](ROADMAP.md) | Planned development |
 
 ---
 

@@ -208,7 +208,7 @@ Update version in:
 
 1. Ensure all changes are committed to `develop`
 2. Update version number
-3. Update `roadmap.md` (move completed items)
+3. Update `ROADMAP.md` (move completed items)
 4. Merge `develop` to `main`
 5. Create git tag
 6. (Optional) Create GitHub release with changelog
@@ -222,7 +222,7 @@ Update version in:
 1. [ ] Create script in appropriate folder
 2. [ ] Add comment-based help
 3. [ ] Update folder `README.md`
-4. [ ] Update `tool-index.md`
+4. [ ] Update `TOOL-INDEX.md`
 5. [ ] Update root `README.md` (tool table)
 6. [ ] Test thoroughly
 7. [ ] Commit with `feat(<scope>): add <tool-name>`

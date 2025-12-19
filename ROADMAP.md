@@ -148,8 +148,8 @@ Items under consideration but not yet prioritized:
 - Initial repository formalization
 - Documentation structure established
 - Existing tools documented
-- tool-index.md created
-- contributing.md created
+- TOOL-INDEX.md created
+- CONTRIBUTING.md created
 - Per-folder README files
 
 ---
