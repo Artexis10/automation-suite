@@ -72,3 +72,8 @@ outputs/*.zip
 
 # Release artifacts (generated at build time, not committed)
 provisioning/VERSION.txt
+
+# Generated test artifacts (never committed)
+provisioning/tests/fixtures/plan-*.json
+provisioning/tests/fixtures/sample-*-output.json
+
