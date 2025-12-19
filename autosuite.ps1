@@ -52,7 +52,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory = $false)]
-    [ValidateSet("apply", "capture", "plan", "verify", "report", "doctor", "state", "")]
+    [ValidateSet("apply", "capture", "plan", "verify", "report", "doctor", "state", "bootstrap", "")]
     [string]$Command,
     
     # Internal flag for dot-sourcing to load functions without running main logic
@@ -378,6 +378,96 @@ function Compute-Drift {
 
 #endregion State Store Helpers
 
+#region PATH Installation
+
+function Install-AutosuiteToPath {
+    <#
+    .SYNOPSIS
+        Install autosuite command to user PATH (idempotent).
+    .DESCRIPTION
+        Creates %LOCALAPPDATA%\Autosuite\bin directory, installs CLI entrypoint,
+        creates CMD shim, and adds to user PATH if not already present.
+        Fully idempotent - safe to run multiple times.
+    #>
+    
+    $binDir = Join-Path $env:LOCALAPPDATA "Autosuite\bin"
+    $cliEntrypoint = Join-Path $binDir "autosuite.ps1"
+    $cmdShim = Join-Path $binDir "autosuite.cmd"
+    
+    Write-Host ""
+    Write-Host "=== Autosuite Bootstrap ==="  -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Create bin directory if it doesn't exist
+    if (-not (Test-Path $binDir)) {
+        Write-Host "[CREATE] Creating directory: $binDir" -ForegroundColor Green
+        New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    } else {
+        Write-Host "[OK] Directory exists: $binDir" -ForegroundColor DarkGray
+    }
+    
+    # Copy autosuite.ps1 to bin directory
+    $sourceScript = $PSCommandPath
+    if (Test-Path $cliEntrypoint) {
+        Write-Host "[UPDATE] Updating CLI entrypoint: $cliEntrypoint" -ForegroundColor Yellow
+    } else {
+        Write-Host "[INSTALL] Installing CLI entrypoint: $cliEntrypoint" -ForegroundColor Green
+    }
+    Copy-Item -Path $sourceScript -Destination $cliEntrypoint -Force
+    
+    # Create CMD shim
+    $shimContent = @"
+@echo off
+REM Autosuite CLI shim - forwards all arguments to PowerShell
+pwsh -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Autosuite\bin\autosuite.ps1" %*
+"@
+    
+    if (Test-Path $cmdShim) {
+        Write-Host "[UPDATE] Updating CMD shim: $cmdShim" -ForegroundColor Yellow
+    } else {
+        Write-Host "[INSTALL] Creating CMD shim: $cmdShim" -ForegroundColor Green
+    }
+    Set-Content -Path $cmdShim -Value $shimContent -Encoding ASCII
+    
+    # Add to user PATH if not already present
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $pathEntries = $userPath -split ';' | Where-Object { $_ }
+    
+    $alreadyInPath = $false
+    foreach ($entry in $pathEntries) {
+        $normalizedEntry = [System.IO.Path]::GetFullPath($entry).TrimEnd('\\')
+        $normalizedBinDir = [System.IO.Path]::GetFullPath($binDir).TrimEnd('\\')
+        if ($normalizedEntry -eq $normalizedBinDir) {
+            $alreadyInPath = $true
+            break
+        }
+    }
+    
+    if ($alreadyInPath) {
+        Write-Host "[OK] Already in PATH: $binDir" -ForegroundColor DarkGray
+    } else {
+        Write-Host "[PATH] Adding to user PATH: $binDir" -ForegroundColor Green
+        $newPath = if ($userPath) { "$userPath;$binDir" } else { $binDir }
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+        
+        # Update current session PATH
+        $env:Path = "$env:Path;$binDir"
+        
+        Write-Host ""
+        Write-Host "[INFO] PATH updated. You may need to restart your terminal for changes to take effect." -ForegroundColor Cyan
+    }
+    
+    Write-Host ""
+    Write-Host "[SUCCESS] Bootstrap complete!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "You can now run 'autosuite --help' from any directory." -ForegroundColor Cyan
+    Write-Host ""
+    
+    return @{ Success = $true; ExitCode = 0; BinDir = $binDir }
+}
+
+#endregion PATH Installation
+
 function Show-Banner {
     Write-Host ""
     Write-Host "Automation Suite - $script:VersionString" -ForegroundColor Cyan
@@ -390,6 +480,7 @@ function Show-Help {
     Write-Host "    .\autosuite.ps1 <command> [options]"
     Write-Host ""
     Write-Host "COMMANDS:" -ForegroundColor Yellow
+    Write-Host "    bootstrap Install autosuite command to user PATH"
     Write-Host "    capture   Capture current machine state into a manifest"
     Write-Host "    apply     Apply manifest to current machine"
     Write-Host "    verify    Verify current state matches manifest"
@@ -2130,6 +2221,12 @@ if (-not $Command) {
 $exitCode = 0
 
 switch ($Command) {
+    "bootstrap" {
+        Write-Information "[autosuite] Bootstrap: installing to PATH..." -InformationAction Continue
+        $result = Install-AutosuiteToPath
+        Write-Information "[autosuite] Bootstrap: completed ExitCode=$($result.ExitCode)" -InformationAction Continue
+        $exitCode = $result.ExitCode
+    }
     "capture" {
         Write-Information "[autosuite] Capture: starting..." -InformationAction Continue
         $captureResult = Invoke-CaptureCore -OutputPath $Out -IsExample $Example.IsPresent -IsSanitize $Sanitize.IsPresent -ManifestName $Name -CustomExamplesDir $ExamplesDir -ForceOverwrite $Force.IsPresent

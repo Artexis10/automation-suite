@@ -117,6 +117,30 @@ Every meaningful action must be verifiable. "It ran" is not success—success me
 
 ---
 
+
+## Bootstrap Installation
+
+Autosuite can be installed to your user PATH for convenient access from any directory.
+
+### Install to PATH
+
+```powershell
+# Install autosuite command to user PATH (idempotent)
+.\autosuite.ps1 bootstrap
+```
+
+This command:
+- Creates `%LOCALAPPDATA%\Autosuite\bin` directory
+- Installs the CLI entrypoint (`autosuite.ps1`) to that directory
+- Creates `autosuite.cmd` shim that forwards all arguments to PowerShell
+- Adds the bin directory to user PATH if not already present
+- Is fully idempotent (safe to run multiple times)
+
+After bootstrap completes, you can run `autosuite --help` from any directory.
+
+**Note:** You may need to restart your terminal for PATH changes to take effect.
+
+---
 ## How to Run
 
 ### Autosuite Commands (Primary Entrypoint)
@@ -825,4 +849,5 @@ $output = & .\autosuite.ps1 verify -Manifest foo.jsonc 6>&1
 | `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
 | `provisioning/manifests/examples/` | Sanitized shareable examples | **Committed** |
 | `provisioning/manifests/fixture-test.jsonc` | Deterministic test fixture | **Committed** |
+
 
