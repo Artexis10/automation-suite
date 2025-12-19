@@ -8,6 +8,7 @@ BeforeAll {
     $script:MockWingetPath = Join-Path $script:TestDir "mock-winget.ps1"
     $script:CapturedArgsPath = Join-Path $script:TestDir "captured-args.json"
     $script:TestManifestPath = Join-Path $script:TestDir "test-manifest.jsonc"
+    $script:AllInstalledManifestPath = Join-Path $script:TestDir "all-installed.jsonc"
     
     New-Item -ItemType Directory -Path $script:TestDir -Force | Out-Null
     
@@ -82,7 +83,7 @@ exit 0
 '@
     Set-Content -Path $script:MockWingetPath -Value $mockWingetContent
     
-    # Create test manifest
+    # Create test manifest with mixed installed/missing apps
     $testManifest = @'
 {
   "version": 1,
@@ -97,6 +98,21 @@ exit 0
 }
 '@
     Set-Content -Path $script:TestManifestPath -Value $testManifest
+    
+    # Create manifest with only installed apps
+    $allInstalledManifest = @'
+{
+  "version": 1,
+  "name": "all-installed",
+  "apps": [
+    { "id": "7zip", "refs": { "windows": "7zip.7zip" } },
+    { "id": "git", "refs": { "windows": "Git.Git" } }
+  ],
+  "restore": [],
+  "verify": []
+}
+'@
+    Set-Content -Path $script:AllInstalledManifestPath -Value $allInstalledManifest
 }
 
 AfterAll {
@@ -130,7 +146,7 @@ Describe "Autosuite Root Orchestrator" {
         }
     }
     
-    Context "Delegation Message" {
+    Context "Delegation Message (in-process)" {
         BeforeEach {
             $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
             if (Test-Path $script:CapturedArgsPath) {
@@ -143,12 +159,18 @@ Describe "Autosuite Root Orchestrator" {
         }
         
         It "Emits stable delegation message for report" {
-            $output = & $script:AutosuitePath report 2>&1
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:ProvisioningCliPath = $script:MockCliPath
+            
+            $output = Invoke-ReportCore -IsLatest $true 4>&1
             $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
         }
         
         It "Emits stable delegation message for doctor" {
-            $output = & $script:AutosuitePath doctor 2>&1
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:ProvisioningCliPath = $script:MockCliPath
+            
+            $output = Invoke-DoctorCore 4>&1
             $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
         }
     }
@@ -222,30 +244,35 @@ Describe "Autosuite Apply Command" {
         $env:AUTOSUITE_WINGET_SCRIPT = $null
     }
     
-    Context "DryRun Mode" {
-        It "Does not invoke winget install with -DryRun" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' apply -Manifest '$($script:TestManifestPath)' -DryRun -OnlyApps" 2>&1
-            $outputStr = $output -join "`n"
+    Context "DryRun Mode (in-process)" {
+        It "Returns success and does not install with -DryRun" {
+            # Dot-source to get access to functions
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:WingetScript = $script:MockWingetPath
             
-            # Should show PLAN for missing app
-            $outputStr | Should -Match "\[PLAN\].*Missing\.App"
+            $result = Invoke-ApplyCore -ManifestPath $script:TestManifestPath -IsDryRun $true -IsOnlyApps $true
+            
+            $result.Success | Should -Be $true
+            $result.ExitCode | Should -Be 0
             
             # Should NOT have actually installed anything
             $installLog = Join-Path $script:TestDir "install-log.txt"
             $installLog | Should -Not -Exist
         }
         
-        It "Emits stable wrapper lines" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' apply -Manifest '$($script:TestManifestPath)' -DryRun -OnlyApps" 2>&1
-            $outputStr = $output -join "`n"
+        It "Emits stable wrapper lines via Write-Output" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:WingetScript = $script:MockWingetPath
             
-            $outputStr | Should -Match "\[autosuite\] Apply: reading manifest"
-            $outputStr | Should -Match "\[autosuite\] Apply: installing apps"
-            $outputStr | Should -Match "\[autosuite\] Apply: completed"
+            $output = Invoke-ApplyCore -ManifestPath $script:TestManifestPath -IsDryRun $true -IsOnlyApps $true 4>&1
+            
+            $output | Should -Contain "[autosuite] Apply: reading manifest $($script:TestManifestPath)"
+            $output | Should -Contain "[autosuite] Apply: installing apps"
+            $output | Should -Contain "[autosuite] Apply: completed"
         }
     }
     
-    Context "Idempotent Installs" {
+    Context "Idempotent Installs (subprocess for Write-Host)" {
         It "Skips already installed apps" {
             $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' apply -Manifest '$($script:TestManifestPath)' -DryRun -OnlyApps" 2>&1
             $outputStr = $output -join "`n"
@@ -267,25 +294,57 @@ Describe "Autosuite Verify Command" {
         $env:AUTOSUITE_WINGET_SCRIPT = $null
     }
     
-    Context "Exit Codes" {
-        It "Exits 0 when all apps are installed" {
-            # Create manifest with only installed apps
-            $allInstalledManifest = Join-Path $script:TestDir "all-installed.jsonc"
-            $content = @'
-{
-  "version": 1,
-  "name": "all-installed",
-  "apps": [
-    { "id": "7zip", "refs": { "windows": "7zip.7zip" } },
-    { "id": "git", "refs": { "windows": "Git.Git" } }
-  ],
-  "restore": [],
-  "verify": []
-}
-'@
-            Set-Content -Path $allInstalledManifest -Value $content
+    Context "Structured Results (in-process)" {
+        It "Returns success when all apps are installed" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:WingetScript = $script:MockWingetPath
             
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$allInstalledManifest'" 2>&1
+            $result = Invoke-VerifyCore -ManifestPath $script:AllInstalledManifestPath
+            
+            $result.Success | Should -Be $true
+            $result.ExitCode | Should -Be 0
+            $result.OkCount | Should -Be 2
+            $result.MissingCount | Should -Be 0
+            $result.MissingApps.Count | Should -Be 0
+        }
+        
+        It "Returns failure with missing apps details" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:WingetScript = $script:MockWingetPath
+            
+            $result = Invoke-VerifyCore -ManifestPath $script:TestManifestPath
+            
+            $result.Success | Should -Be $false
+            $result.ExitCode | Should -Be 1
+            $result.OkCount | Should -Be 2
+            $result.MissingCount | Should -Be 1
+            $result.MissingApps | Should -Contain "Missing.App"
+        }
+        
+        It "Emits stable wrapper lines via Write-Output" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:WingetScript = $script:MockWingetPath
+            
+            $output = Invoke-VerifyCore -ManifestPath $script:TestManifestPath 4>&1
+            
+            $output | Should -Contain "[autosuite] Verify: checking manifest $($script:TestManifestPath)"
+            $output | Should -Contain "[autosuite] Verify: OkCount=2 MissingCount=1"
+            $output | Should -Contain "[autosuite] Verify: FAILED"
+        }
+        
+        It "Emits PASSED for successful verify" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:WingetScript = $script:MockWingetPath
+            
+            $output = Invoke-VerifyCore -ManifestPath $script:AllInstalledManifestPath 4>&1
+            
+            $output | Should -Contain "[autosuite] Verify: PASSED"
+        }
+    }
+    
+    Context "Process Exit Codes (subprocess)" {
+        It "Exits 0 when all apps are installed" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:AllInstalledManifestPath)'" 2>&1
             $exitCode = $LASTEXITCODE
             
             $exitCode | Should -Be 0
@@ -296,31 +355,6 @@ Describe "Autosuite Verify Command" {
             $exitCode = $LASTEXITCODE
             
             $exitCode | Should -Be 1
-        }
-    }
-    
-    Context "Summary Output" {
-        It "Shows OK count and missing count" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
-            $outputStr = $output -join "`n"
-            
-            $outputStr | Should -Match "Installed OK.*2"
-            $outputStr | Should -Match "Missing.*1"
-        }
-        
-        It "Lists missing apps" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
-            $outputStr = $output -join "`n"
-            
-            $outputStr | Should -Match "Missing\.App"
-        }
-        
-        It "Emits stable wrapper lines" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
-            $outputStr = $output -join "`n"
-            
-            $outputStr | Should -Match "\[autosuite\] Verify: checking manifest"
-            $outputStr | Should -Match "\[autosuite\] Verify: (PASSED|FAILED)"
         }
     }
 }

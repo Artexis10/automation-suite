@@ -52,8 +52,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory = $false)]
-    [ValidateSet("apply", "capture", "plan", "verify", "report", "doctor")]
+    [ValidateSet("apply", "capture", "plan", "verify", "report", "doctor", "")]
     [string]$Command,
+    
+    # Internal flag for dot-sourcing to load functions without running main logic
+    [Parameter(Mandatory = $false)]
+    [switch]$LoadFunctionsOnly,
 
     [Parameter(Mandatory = $false)]
     [string]$Profile,
@@ -175,12 +179,11 @@ function Invoke-ProvisioningCli {
     
     if (-not (Test-Path $cliPath)) {
         Write-Host "[ERROR] Provisioning CLI not found: $cliPath" -ForegroundColor Red
-        exit 1
+        return @{ Success = $false; ExitCode = 1; Error = "Provisioning CLI not found" }
     }
     
-    # Emit stable wrapper line via Write-Output for testability (also Write-Host for console)
-    $delegationMsg = "[autosuite] Delegating to provisioning subsystem..."
-    Write-Output $delegationMsg
+    # Emit stable wrapper line via Write-Output for testability
+    Write-Output "[autosuite] Delegating to provisioning subsystem..."
     Write-Host ""
     
     $params = @{ Command = $ProvisioningCommand }
@@ -193,32 +196,23 @@ function Invoke-ProvisioningCli {
     
     & $cliPath @params
     
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    $exitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+    return @{ Success = ($exitCode -eq 0); ExitCode = $exitCode }
 }
 
-function Invoke-Apply {
+function Invoke-ApplyCore {
     param(
-        [string]$ProfileName,
         [string]$ManifestPath,
         [bool]$IsDryRun,
-        [bool]$IsOnlyApps,
-        [bool]$IsEnableRestore
+        [bool]$IsOnlyApps
     )
     
-    # Resolve manifest path
-    $resolvedPath = if ($ManifestPath) {
-        $ManifestPath
-    } elseif ($ProfileName) {
-        Resolve-ManifestPath -ProfileName $ProfileName
-    } else {
-        Write-Host "[ERROR] Either -Profile or -Manifest is required for 'apply' command." -ForegroundColor Red
-        exit 1
-    }
+    Write-Output "[autosuite] Apply: reading manifest $ManifestPath"
+    $manifest = Read-Manifest -Path $ManifestPath
     
-    Write-Output "[autosuite] Apply: reading manifest $resolvedPath"
-    $manifest = Read-Manifest -Path $resolvedPath
+    if (-not $manifest) {
+        return @{ Success = $false; ExitCode = 1; Error = "Failed to read manifest" }
+    }
     
     Write-Output "[autosuite] Apply: installing apps"
     
@@ -275,13 +269,32 @@ function Invoke-Apply {
         Write-Host "  Failed:    $failed" -ForegroundColor Red
     }
     
-    # Run verify unless -OnlyApps
+    # Run verify unless -OnlyApps or -DryRun
+    $verifyResult = $null
     if (-not $IsOnlyApps -and -not $IsDryRun) {
         Write-Host ""
-        Invoke-VerifyManifest -ManifestPath $resolvedPath
+        $verifyResult = Invoke-VerifyCore -ManifestPath $ManifestPath
     }
     
     Write-Output "[autosuite] Apply: completed"
+    
+    # DryRun always succeeds; otherwise propagate verify result if run
+    if ($IsDryRun) {
+        return @{ Success = $true; ExitCode = 0; Installed = $installed; Skipped = $skipped; Failed = $failed }
+    }
+    
+    if ($verifyResult) {
+        return @{ 
+            Success = $verifyResult.Success
+            ExitCode = $verifyResult.ExitCode
+            Installed = $installed
+            Skipped = $skipped
+            Failed = $failed
+            VerifyResult = $verifyResult
+        }
+    }
+    
+    return @{ Success = ($failed -eq 0); ExitCode = (if ($failed -gt 0) { 1 } else { 0 }); Installed = $installed; Skipped = $skipped; Failed = $failed }
 }
 
 function Get-InstalledApps {
@@ -311,7 +324,7 @@ function Read-Manifest {
     
     if (-not (Test-Path $Path)) {
         Write-Host "[ERROR] Manifest not found: $Path" -ForegroundColor Red
-        exit 1
+        return $null
     }
     
     $content = Get-Content -Path $Path -Raw
@@ -322,7 +335,7 @@ function Read-Manifest {
         return $jsonContent | ConvertFrom-Json
     } catch {
         Write-Host "[ERROR] Failed to parse manifest: $_" -ForegroundColor Red
-        exit 1
+        return $null
     }
 }
 
@@ -403,91 +416,15 @@ function Invoke-Capture {
     Write-Output "[autosuite] Capture: completed"
 }
 
-function Invoke-VerifyManifest {
+function Invoke-VerifyCore {
     param([string]$ManifestPath)
     
     Write-Output "[autosuite] Verify: checking manifest $ManifestPath"
     $manifest = Read-Manifest -Path $ManifestPath
     
-    $okCount = 0
-    $missingCount = 0
-    $missingApps = @()
-    
-    foreach ($app in $manifest.apps) {
-        $wingetId = $app.refs.windows
-        if (-not $wingetId) {
-            continue
-        }
-        
-        $isInstalled = Test-AppInstalled -WingetId $wingetId
-        
-        if ($isInstalled) {
-            Write-Host "  [OK] $wingetId" -ForegroundColor Green
-            $okCount++
-        } else {
-            Write-Host "  [MISSING] $wingetId" -ForegroundColor Red
-            $missingCount++
-            $missingApps += $wingetId
-        }
+    if (-not $manifest) {
+        return @{ Success = $false; ExitCode = 1; Error = "Failed to read manifest"; OkCount = 0; MissingCount = 0; MissingApps = @() }
     }
-    
-    Write-Host ""
-    Write-Host "[autosuite] Verify: Summary" -ForegroundColor Cyan
-    Write-Host "  Installed OK: $okCount" -ForegroundColor Green
-    Write-Host "  Missing:      $missingCount" -ForegroundColor $(if ($missingCount -gt 0) { "Red" } else { "Green" })
-    
-    if ($missingCount -gt 0) {
-        Write-Host ""
-        Write-Host "Missing apps:" -ForegroundColor Yellow
-        foreach ($app in $missingApps) {
-            Write-Host "  - $app"
-        }
-        Write-Output "[autosuite] Verify: FAILED"
-        return 1
-    }
-    
-    Write-Output "[autosuite] Verify: PASSED"
-    return 0
-}
-
-function Invoke-Plan {
-    param(
-        [string]$ProfileName,
-        [string]$ManifestPath
-    )
-    
-    $cliArgs = @{}
-    
-    if ($ManifestPath) {
-        $cliArgs.Manifest = $ManifestPath
-    } elseif ($ProfileName) {
-        $cliArgs.Manifest = Resolve-ManifestPath -ProfileName $ProfileName
-    } else {
-        Write-Host "[ERROR] Either -Profile or -Manifest is required for 'plan' command." -ForegroundColor Red
-        exit 1
-    }
-    
-    Invoke-ProvisioningCli -ProvisioningCommand "plan" -Arguments $cliArgs
-}
-
-function Invoke-Verify {
-    param(
-        [string]$ProfileName,
-        [string]$ManifestPath
-    )
-    
-    # Resolve manifest path
-    $resolvedPath = if ($ManifestPath) {
-        $ManifestPath
-    } elseif ($ProfileName) {
-        Resolve-ManifestPath -ProfileName $ProfileName
-    } else {
-        Write-Host "[ERROR] Either -Profile or -Manifest is required for 'verify' command." -ForegroundColor Red
-        exit 1
-    }
-    
-    Write-Output "[autosuite] Verify: checking manifest $resolvedPath"
-    $manifest = Read-Manifest -Path $resolvedPath
     
     $okCount = 0
     $missingCount = 0
@@ -516,6 +453,9 @@ function Invoke-Verify {
     Write-Host "  Installed OK: $okCount" -ForegroundColor Green
     Write-Host "  Missing:      $missingCount" -ForegroundColor $(if ($missingCount -gt 0) { "Red" } else { "Green" })
     
+    # Output summary via Write-Output for test capture
+    Write-Output "[autosuite] Verify: OkCount=$okCount MissingCount=$missingCount"
+    
     if ($missingCount -gt 0) {
         Write-Host ""
         Write-Host "Missing apps:" -ForegroundColor Yellow
@@ -523,14 +463,23 @@ function Invoke-Verify {
             Write-Host "  - $app"
         }
         Write-Output "[autosuite] Verify: FAILED"
-        exit 1
+        return @{ Success = $false; ExitCode = 1; OkCount = $okCount; MissingCount = $missingCount; MissingApps = $missingApps }
     }
     
     Write-Output "[autosuite] Verify: PASSED"
-    exit 0
+    return @{ Success = $true; ExitCode = 0; OkCount = $okCount; MissingCount = $missingCount; MissingApps = @() }
 }
 
-function Invoke-Report {
+function Invoke-PlanCore {
+    param(
+        [string]$ManifestPath
+    )
+    
+    $cliArgs = @{ Manifest = $ManifestPath }
+    return Invoke-ProvisioningCli -ProvisioningCommand "plan" -Arguments $cliArgs
+}
+
+function Invoke-ReportCore {
     param(
         [bool]$IsLatest,
         [string]$ReportRunId,
@@ -545,14 +494,36 @@ function Invoke-Report {
     if ($LastN -gt 0) { $cliArgs.Last = $LastN }
     if ($OutputJson) { $cliArgs.Json = $true }
     
-    Invoke-ProvisioningCli -ProvisioningCommand "report" -Arguments $cliArgs
+    return Invoke-ProvisioningCli -ProvisioningCommand "report" -Arguments $cliArgs
 }
 
-function Invoke-Doctor {
-    Invoke-ProvisioningCli -ProvisioningCommand "doctor" -Arguments @{}
+function Invoke-DoctorCore {
+    return Invoke-ProvisioningCli -ProvisioningCommand "doctor" -Arguments @{}
 }
 
-# Main execution
+# Helper to resolve manifest path with validation
+function Resolve-ManifestPathWithValidation {
+    param(
+        [string]$ProfileName,
+        [string]$ManifestPath,
+        [string]$CommandName
+    )
+    
+    if ($ManifestPath) {
+        return $ManifestPath
+    } elseif ($ProfileName) {
+        return Resolve-ManifestPath -ProfileName $ProfileName
+    } else {
+        Write-Host "[ERROR] Either -Profile or -Manifest is required for '$CommandName' command." -ForegroundColor Red
+        return $null
+    }
+}
+
+# Main execution - skip if loading functions only (for testing)
+if ($LoadFunctionsOnly) {
+    return
+}
+
 Show-Banner
 
 if (-not $Command) {
@@ -560,27 +531,48 @@ if (-not $Command) {
     exit 0
 }
 
+$exitCode = 0
+
 switch ($Command) {
     "capture" {
         Invoke-Capture -OutputPath $Out -IsExample $Example.IsPresent
     }
     "apply" {
-        Invoke-Apply -ProfileName $Profile -ManifestPath $Manifest -IsDryRun $DryRun.IsPresent -IsOnlyApps $OnlyApps.IsPresent -IsEnableRestore $EnableRestore.IsPresent
+        $resolvedPath = Resolve-ManifestPathWithValidation -ProfileName $Profile -ManifestPath $Manifest -CommandName "apply"
+        if (-not $resolvedPath) {
+            exit 1
+        }
+        $result = Invoke-ApplyCore -ManifestPath $resolvedPath -IsDryRun $DryRun.IsPresent -IsOnlyApps $OnlyApps.IsPresent
+        $exitCode = $result.ExitCode
     }
     "verify" {
-        Invoke-Verify -ProfileName $Profile -ManifestPath $Manifest
+        $resolvedPath = Resolve-ManifestPathWithValidation -ProfileName $Profile -ManifestPath $Manifest -CommandName "verify"
+        if (-not $resolvedPath) {
+            exit 1
+        }
+        $result = Invoke-VerifyCore -ManifestPath $resolvedPath
+        $exitCode = $result.ExitCode
     }
     "plan" {
-        Invoke-Plan -ProfileName $Profile -ManifestPath $Manifest
+        $resolvedPath = Resolve-ManifestPathWithValidation -ProfileName $Profile -ManifestPath $Manifest -CommandName "plan"
+        if (-not $resolvedPath) {
+            exit 1
+        }
+        $result = Invoke-PlanCore -ManifestPath $resolvedPath
+        $exitCode = $result.ExitCode
     }
     "report" {
-        Invoke-Report -IsLatest $Latest.IsPresent -ReportRunId $RunId -LastN $Last -OutputJson $Json.IsPresent
+        $result = Invoke-ReportCore -IsLatest $Latest.IsPresent -ReportRunId $RunId -LastN $Last -OutputJson $Json.IsPresent
+        $exitCode = $result.ExitCode
     }
     "doctor" {
-        Invoke-Doctor
+        $result = Invoke-DoctorCore
+        $exitCode = $result.ExitCode
     }
     default {
         Show-Help
         exit 1
     }
 }
+
+exit $exitCode
