@@ -8,6 +8,54 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ---
 
+## JSONC Manifest Support
+
+**All manifest and plan parsing in the provisioning engine supports JSONC (JSON with Comments).**
+
+### Canonical JSONC Loader
+
+The provisioning engine uses a single canonical function for all JSONC parsing:
+
+- **Function**: `Read-JsoncFile` in `provisioning/engine/manifest.ps1`
+- **Purpose**: Parse JSONC files with comment stripping (single-line `//` and multi-line `/* */`)
+- **Depth**: Default 100 levels for deeply nested structures
+- **Usage**: All manifest, plan, and state file parsing uses this function
+
+### Comment Support
+
+JSONC files support:
+- **Single-line comments**: `// comment text`
+- **Multi-line comments**: `/* comment text */`
+- **Inline comments**: `"key": "value" // inline comment`
+
+Comments are stripped before JSON parsing, ensuring compatibility with standard JSON parsers.
+
+### Implementation
+
+All code paths that parse manifests, plans, or state files use `Read-JsoncFile`:
+- Manifest loading (`Read-Manifest`, `Read-ManifestRaw`)
+- Plan file loading (`Invoke-ApplyFromPlan`)
+- State file loading (`Read-StateFile`)
+- Artifact file loading (`Read-ArtifactFile`)
+
+### Testing
+
+Regression tests in `provisioning/tests/unit/Manifest.Tests.ps1` verify:
+- Header comments (lines 2-6) parse correctly
+- Inline comments after values work
+- Multi-line comments are stripped properly
+- Real manifests like `fixture-test.jsonc` load successfully
+
+------
+trigger: always
+---
+
+# Automation Suite Project Ruleset
+
+This ruleset governs development and operation of the Automation Suite repository.
+
+---
+
 ## Glossary
 
 | Term | Definition |
@@ -212,7 +260,33 @@ autosuite verify -Profile hugo-win11
 | `provisioning/manifests/fixture-test.jsonc` | Committed test fixture (deterministic) |
 | `provisioning/manifests/local/` | Machine-specific captures (gitignored) |
 
-#### Environment Variables for Testing
+#
+
+### Provisioning CLI Path Resolution
+
+The utosuite command locates the provisioning CLI using repo root resolution:
+
+**Priority order:**
+1. AUTOSUITE_PROVISIONING_CLI environment variable (testing override)
+2. Repo root resolution:
+   - AUTOSUITE_ROOT environment variable
+   - %LOCALAPPDATA%\Autosuite\repo-root.txt (persisted during bootstrap)
+   - Fallback to $PSScriptRoot when running from repo
+
+**Behavior:**
+- capture command uses repo root to locate provisioning\cli.ps1
+- If repo root is not configured, fails with actionable error message
+- -Out paths in capture are resolved relative to current working directory
+
+**Configuration:**
+`powershell
+# Set via environment variable (session-specific)
+$env:AUTOSUITE_ROOT = "C:\path\to\automation-suite"
+
+# Or persist via bootstrap (recommended)
+autosuite bootstrap -RepoRoot C:\path\to\automation-suite
+`
+### Environment Variables for Testing
 
 | Variable | Description |
 |----------|-------------|
@@ -878,6 +952,7 @@ $output = & .\autosuite.ps1 verify -Manifest foo.jsonc 6>&1
 | `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
 | `provisioning/manifests/examples/` | Sanitized shareable examples | **Committed** |
 | `provisioning/manifests/fixture-test.jsonc` | Deterministic test fixture | **Committed** |
+
 
 
 
