@@ -1395,7 +1395,116 @@ function Install-AppWithDriver {
 
 #endregion Driver Abstraction (Bundle C)
 
+function Remove-JsoncComments {
+    <#
+    .SYNOPSIS
+        Strip JSONC comments from JSON content (PS5.1-safe state machine).
+    .DESCRIPTION
+        Removes single-line (//) and multi-line (/* */) comments while preserving:
+        - Strings containing // or /* (e.g., "http://example.com")
+        - Escaped quotes inside strings
+        - Line endings (CRLF/LF)
+    .PARAMETER Content
+        Raw JSONC content string.
+    .OUTPUTS
+        String with comments removed, ready for ConvertFrom-Json.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+    
+    # PS5.1-safe StringBuilder construction
+    $result = New-Object System.Text.StringBuilder
+    $inString = $false
+    $escaped = $false
+    $i = 0
+    
+    while ($i -lt $Content.Length) {
+        $char = $Content[$i]
+        $nextChar = if ($i + 1 -lt $Content.Length) { $Content[$i + 1] } else { $null }
+        
+        # Handle escape sequences inside strings
+        if ($escaped) {
+            [void]$result.Append($char)
+            $escaped = $false
+            $i++
+            continue
+        }
+        
+        # Detect escape character inside string
+        if ($char -eq '\' -and $inString) {
+            [void]$result.Append($char)
+            $escaped = $true
+            $i++
+            continue
+        }
+        
+        # Toggle string state on unescaped quote
+        if ($char -eq '"' -and -not $escaped) {
+            $inString = -not $inString
+            [void]$result.Append($char)
+            $i++
+            continue
+        }
+        
+        # Only strip comments outside of strings
+        if (-not $inString) {
+            # Single-line comment: // ...
+            if ($char -eq '/' -and $nextChar -eq '/') {
+                # Skip until end of line (preserve the newline)
+                while ($i -lt $Content.Length -and $Content[$i] -ne "`n" -and $Content[$i] -ne "`r") {
+                    $i++
+                }
+                # Keep the line ending
+                if ($i -lt $Content.Length -and ($Content[$i] -eq "`n" -or $Content[$i] -eq "`r")) {
+                    [void]$result.Append($Content[$i])
+                    $i++
+                    # Handle CRLF
+                    if ($i -lt $Content.Length -and $Content[$i-1] -eq "`r" -and $Content[$i] -eq "`n") {
+                        [void]$result.Append($Content[$i])
+                        $i++
+                    }
+                }
+                continue
+            }
+            
+            # Multi-line comment: /* ... */
+            if ($char -eq '/' -and $nextChar -eq '*') {
+                $i += 2
+                # Skip until */
+                while ($i -lt $Content.Length - 1) {
+                    if ($Content[$i] -eq '*' -and $Content[$i + 1] -eq '/') {
+                        $i += 2
+                        break
+                    }
+                    $i++
+                }
+                continue
+            }
+        }
+        
+        # Append character to result
+        [void]$result.Append($char)
+        $i++
+    }
+    
+    return $result.ToString()
+}
+
 function Read-Manifest {
+    <#
+    .SYNOPSIS
+        Canonical JSONC manifest loader for autosuite (PS5.1+ compatible).
+    .DESCRIPTION
+        Reads a manifest file and parses it as JSONC (JSON with comments).
+        Uses state machine to strip comments only outside JSON strings.
+        Compatible with Windows PowerShell 5.1 and PowerShell 7+.
+    .PARAMETER Path
+        Path to the manifest file (.jsonc, .json, .yaml, .yml).
+    .OUTPUTS
+        Hashtable representation of the parsed manifest.
+    #>
     param([string]$Path)
     
     if (-not (Test-Path $Path)) {
@@ -1403,16 +1512,86 @@ function Read-Manifest {
         return $null
     }
     
-    $content = Get-Content -Path $Path -Raw
-    # Strip JSONC comments for parsing
-    $jsonContent = $content -replace '//.*$', '' -replace '/\*[\s\S]*?\*/', ''
-    
     try {
-        return $jsonContent | ConvertFrom-Json
+        $content = Get-Content -Path $Path -Raw -Encoding UTF8
+        
+        # Determine file type
+        $extension = [System.IO.Path]::GetExtension($Path).ToLower()
+        
+        # For JSONC/JSON files, strip comments using state machine
+        if ($extension -eq '.jsonc' -or $extension -eq '.json') {
+            $cleanJson = Remove-JsoncComments -Content $content
+            
+            # PS5.1 vs PS7+ compatibility: -AsHashtable only exists in PS6+
+            if ($PSVersionTable.PSVersion.Major -ge 6) {
+                $parsed = $cleanJson | ConvertFrom-Json -AsHashtable -Depth 100
+            } else {
+                # PS5.1: ConvertFrom-Json returns PSCustomObject
+                $parsed = $cleanJson | ConvertFrom-Json
+                # Convert to hashtable for consistency
+                $parsed = ConvertPSObjectToHashtable -InputObject $parsed
+            }
+            
+            return $parsed
+        }
+        
+        # For YAML files, use simple parsing (no comments support yet)
+        if ($extension -eq '.yaml' -or $extension -eq '.yml') {
+            Write-Host "[WARN] YAML parsing not fully implemented in autosuite.ps1" -ForegroundColor Yellow
+            return $null
+        }
+        
+        # Unknown extension, try JSONC
+        $cleanJson = Remove-JsoncComments -Content $content
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $parsed = $cleanJson | ConvertFrom-Json -AsHashtable -Depth 100
+        } else {
+            $parsed = $cleanJson | ConvertFrom-Json
+            $parsed = ConvertPSObjectToHashtable -InputObject $parsed
+        }
+        return $parsed
+        
     } catch {
-        Write-Host "[ERROR] Failed to parse manifest: $_" -ForegroundColor Red
+        Write-Host "[ERROR] Failed to parse manifest '$Path': $_" -ForegroundColor Red
         return $null
     }
+}
+
+function ConvertPSObjectToHashtable {
+    <#
+    .SYNOPSIS
+        Recursively convert PSCustomObject to hashtable (PS5.1 compatibility).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        $InputObject
+    )
+    
+    if ($null -eq $InputObject) {
+        return $null
+    }
+    
+    if ($InputObject -is [hashtable]) {
+        return $InputObject
+    }
+    
+    if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+        $collection = @()
+        foreach ($item in $InputObject) {
+            $collection += ConvertPSObjectToHashtable -InputObject $item
+        }
+        return $collection
+    }
+    
+    if ($InputObject -is [PSCustomObject]) {
+        $hash = @{}
+        foreach ($property in $InputObject.PSObject.Properties) {
+            $hash[$property.Name] = ConvertPSObjectToHashtable -InputObject $property.Value
+        }
+        return $hash
+    }
+    
+    return $InputObject
 }
 
 function Write-ExampleManifest {
