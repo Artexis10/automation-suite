@@ -8,9 +8,11 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ---
 
-## JSONC Manifest Support
+## JSONC Manifest Support (Windows PowerShell 5.1+ Compatible)
 
 **All manifest and plan parsing in the provisioning engine supports JSONC (JSON with Comments).**
+
+**Critical**: The JSONC parser is fully compatible with **Windows PowerShell 5.1** (stock Win11) and **PowerShell 7+**.
 
 ### Canonical JSONC Loader
 
@@ -18,8 +20,9 @@ The provisioning engine uses a single canonical function for all JSONC parsing:
 
 - **Function**: `Read-JsoncFile` in `provisioning/engine/manifest.ps1`
 - **Purpose**: Parse JSONC files with comment stripping (single-line `//` and multi-line `/* */`)
+- **Implementation**: PS5.1-safe state machine that preserves strings containing `//` (e.g., `"http://example.com"`)
 - **Depth**: Default 100 levels for deeply nested structures
-- **Usage**: All manifest, plan, and state file parsing uses this function
+- **Compatibility**: Automatically detects PS version and uses appropriate parsing strategy
 
 ### Comment Support
 
@@ -28,9 +31,11 @@ JSONC files support:
 - **Multi-line comments**: `/* comment text */`
 - **Inline comments**: `"key": "value" // inline comment`
 
-Comments are stripped before JSON parsing, ensuring compatibility with standard JSON parsers.
+Comments are stripped **only when outside JSON strings**, preserving URLs and other string content containing `//` or `/*`.
 
-### Implementation
+### Implementation Details
+
+**Do NOT use `ConvertFrom-Json` directly for manifests/plans/state files. Always use `Read-JsoncFile`.**
 
 All code paths that parse manifests, plans, or state files use `Read-JsoncFile`:
 - Manifest loading (`Read-Manifest`, `Read-ManifestRaw`)
@@ -38,13 +43,30 @@ All code paths that parse manifests, plans, or state files use `Read-JsoncFile`:
 - State file loading (`Read-StateFile`)
 - Artifact file loading (`Read-ArtifactFile`)
 
+The parser uses a state machine that:
+1. Tracks whether we're inside a JSON string
+2. Handles escape sequences (`\"`, `\\`)
+3. Strips `//` and `/* */` only outside strings
+4. Preserves CRLF/LF line endings
+5. Converts PSCustomObject to hashtable on PS5.1
+
+### PowerShell Version Compatibility
+
+| Version | Status | Notes |
+|---------|--------|-------|
+| Windows PowerShell 5.1 | ✅ Fully Supported | Uses `New-Object System.Text.StringBuilder` and `Convert-PsObjectToHashtable` |
+| PowerShell 7+ | ✅ Fully Supported | Uses `ConvertFrom-Json -AsHashtable` directly |
+
 ### Testing
 
 Regression tests in `provisioning/tests/unit/Manifest.Tests.ps1` verify:
-- Header comments (lines 2-6) parse correctly
+- Header comments (lines 2-6) parse correctly (fixes "Invalid object passed in, ':' or '}' expected. (6)")
 - Inline comments after values work
-- Multi-line comments are stripped properly
-- Real manifests like `fixture-test.jsonc` load successfully
+- Multi-line `/* */` comments are stripped properly
+- Strings containing `http://` URLs are preserved
+- CRLF line endings are handled correctly
+- Tests run on both PS5.1 and PS7+
+- Real manifests like `fixture-test.jsonc` and `hugo-desktop.jsonc` load successfully
 
 ------
 trigger: always
