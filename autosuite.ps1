@@ -840,6 +840,12 @@ function Invoke-ApplyCore {
     $upgraded = 0
     $timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
     
+    # Load progress module
+    $progressModulePath = Join-Path $script:AutosuiteRoot "provisioning\engine\progress.ps1"
+    if (Test-Path $progressModulePath) {
+        . $progressModulePath
+    }
+    
     # Parallel execution path
     if ($IsParallel) {
         Write-Host ""
@@ -926,12 +932,33 @@ function Invoke-ApplyCore {
             Write-Host "    Sequential (unsafe): $($split.Sequential.Count)" -ForegroundColor DarkGray
             Write-Host ""
             
+            # Initialize progress tracking if available
+            $useProgress = $null -ne (Get-Command New-ProgressEventQueue -ErrorAction SilentlyContinue)
+            $eventQueue = $null
+            $progressState = $null
+            
+            if ($useProgress) {
+                $totalApps = $split.Parallel.Count + $split.Sequential.Count
+                $eventQueue = New-ProgressEventQueue
+                $progressState = New-ProgressState -TotalApps $totalApps -ParallelThrottle $ThrottleLimit
+                $progressState.QueuedCount = $split.Parallel.Count
+            }
+            
             # Execute parallel-safe apps first
             if ($split.Parallel.Count -gt 0) {
                 Write-Host "  === Parallel Installation ===" -ForegroundColor Cyan
+                Write-Host ""
+                
+                if ($useProgress) {
+                    Start-ProgressTracking -State $progressState
+                }
                 
                 $wingetScriptPath = $script:WingetScript
-                $parallelResults = Invoke-ParallelAppInstall -Apps $split.Parallel -Throttle $ThrottleLimit -DryRun:$IsDryRun -WingetScriptPath $wingetScriptPath
+                $parallelResults = Invoke-ParallelAppInstall -Apps $split.Parallel -Throttle $ThrottleLimit -DryRun:$IsDryRun -WingetScriptPath $wingetScriptPath -EventQueue $eventQueue
+                
+                if ($useProgress) {
+                    Complete-ProgressTracking -State $progressState -EventQueue $eventQueue
+                }
                 
                 # Process results and output logs
                 foreach ($result in $parallelResults) {
@@ -960,16 +987,30 @@ function Invoke-ApplyCore {
             # Execute sequential (unsafe) apps
             if ($split.Sequential.Count -gt 0) {
                 Write-Host "  === Sequential Installation (Unsafe Apps) ===" -ForegroundColor Yellow
+                Write-Host ""
+                
+                # Update progress state for sequential mode
+                if ($useProgress) {
+                    $progressState.ParallelThrottle = 0
+                    $progressState.QueuedCount = 0
+                    Start-ProgressTracking -State $progressState
+                }
                 
                 foreach ($appInfo in $split.Sequential) {
                     $app = $appInfo.app
                     $appDisplayId = $appInfo.ref
                     
+                    # Emit AppStarted event
+                    if ($useProgress) {
+                        $progressState.RunningApps = @($appInfo.id)
+                        Show-Progress -State $progressState -Force
+                    }
+                    
                     if ($IsDryRun) {
-                        Write-Host "  [PLAN] $appDisplayId - would install (sequential/unsafe)" -ForegroundColor Cyan
+                        Write-Host "`r$(' ' * 120)`r  [PLAN] $appDisplayId - would install (sequential/unsafe)" -ForegroundColor Cyan
                         $installed++
                     } else {
-                        Write-Host "  [INSTALL] $appDisplayId (sequential/unsafe)" -ForegroundColor Green
+                        Write-Host "`r$(' ' * 120)`r  [INSTALL] $appDisplayId (sequential/unsafe)" -ForegroundColor Green
                         $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $false
                         
                         if ($result.Success) {
@@ -979,19 +1020,57 @@ function Invoke-ApplyCore {
                             $failed++
                         }
                     }
+                    
+                    # Update progress
+                    if ($useProgress) {
+                        $progressState.RunningApps = @()
+                        $progressState.CompletedCount++
+                        if (-not $result.Success) {
+                            $progressState.FailedCount++
+                        }
+                        Show-Progress -State $progressState -Force
+                    }
+                }
+                
+                if ($useProgress) {
+                    Complete-ProgressTracking -State $progressState
                 }
             }
         }
     } else {
         # Sequential execution path (original behavior)
+        
+        # Initialize progress tracking if available
+        $useProgress = $null -ne (Get-Command New-ProgressEventQueue -ErrorAction SilentlyContinue)
+        $progressState = $null
+        
+        if ($useProgress) {
+            $totalApps = $manifest.apps.Count
+            $progressState = New-ProgressState -TotalApps $totalApps -ParallelThrottle 0
+            Write-Host ""
+            Start-ProgressTracking -State $progressState
+        }
+        
         foreach ($app in $manifest.apps) {
             $driver = Get-AppDriver -App $app
             $appDisplayId = if ($driver -eq 'winget') { Get-AppWingetId -App $app } else { $app.id }
             
             if (-not $appDisplayId) {
-                Write-Host "  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
+                if ($useProgress) {
+                    Write-Host "`r$(' ' * 120)`r  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
+                    $progressState.CompletedCount++
+                    Show-Progress -State $progressState -Force
+                } else {
+                    Write-Host "  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
+                }
                 $skipped++
                 continue
+            }
+            
+            # Update running app
+            if ($useProgress) {
+                $progressState.RunningApps = @($app.id)
+                Show-Progress -State $progressState -Force
             }
             
             # Check if already installed using driver abstraction
@@ -1008,10 +1087,18 @@ function Invoke-ApplyCore {
                         # Version mismatch - attempt upgrade for winget, report for custom
                         if ($driver -eq 'winget') {
                             if ($IsDryRun) {
-                                Write-Host "  [PLAN] $appDisplayId - would upgrade ($($versionCheck.Reason))" -ForegroundColor Cyan
+                                if ($useProgress) {
+                                    Write-Host "`r$(' ' * 120)`r  [PLAN] $appDisplayId - would upgrade ($($versionCheck.Reason))" -ForegroundColor Cyan
+                                } else {
+                                    Write-Host "  [PLAN] $appDisplayId - would upgrade ($($versionCheck.Reason))" -ForegroundColor Cyan
+                                }
                                 $upgraded++
                             } else {
-                                Write-Host "  [UPGRADE] $appDisplayId ($($versionCheck.Reason))" -ForegroundColor Yellow
+                                if ($useProgress) {
+                                    Write-Host "`r$(' ' * 120)`r  [UPGRADE] $appDisplayId ($($versionCheck.Reason))" -ForegroundColor Yellow
+                                } else {
+                                    Write-Host "  [UPGRADE] $appDisplayId ($($versionCheck.Reason))" -ForegroundColor Yellow
+                                }
                                 $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $true
                                 if ($result.Success) {
                                     $upgraded++
@@ -1021,24 +1108,49 @@ function Invoke-ApplyCore {
                                 }
                             }
                         } else {
-                            Write-Host "  [MANUAL] $appDisplayId - version mismatch, manual intervention needed ($($versionCheck.Reason))" -ForegroundColor Yellow
+                            if ($useProgress) {
+                                Write-Host "`r$(' ' * 120)`r  [MANUAL] $appDisplayId - version mismatch, manual intervention needed ($($versionCheck.Reason))" -ForegroundColor Yellow
+                            } else {
+                                Write-Host "  [MANUAL] $appDisplayId - version mismatch, manual intervention needed ($($versionCheck.Reason))" -ForegroundColor Yellow
+                            }
                             $failed++
+                        }
+                        
+                        if ($useProgress) {
+                            $progressState.RunningApps = @()
+                            $progressState.CompletedCount++
+                            Show-Progress -State $progressState -Force
                         }
                         continue
                     }
                 }
                 
-                Write-Host "  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
+                if ($useProgress) {
+                    Write-Host "`r$(' ' * 120)`r  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
+                    $progressState.RunningApps = @()
+                    $progressState.CompletedCount++
+                    Show-Progress -State $progressState -Force
+                } else {
+                    Write-Host "  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
+                }
                 $skipped++
                 continue
             }
             
             # Not installed - install it
             if ($IsDryRun) {
-                Write-Host "  [PLAN] $appDisplayId - would install (driver: $driver)" -ForegroundColor Cyan
+                if ($useProgress) {
+                    Write-Host "`r$(' ' * 120)`r  [PLAN] $appDisplayId - would install (driver: $driver)" -ForegroundColor Cyan
+                } else {
+                    Write-Host "  [PLAN] $appDisplayId - would install (driver: $driver)" -ForegroundColor Cyan
+                }
                 $installed++
             } else {
-                Write-Host "  [INSTALL] $appDisplayId (driver: $driver)" -ForegroundColor Green
+                if ($useProgress) {
+                    Write-Host "`r$(' ' * 120)`r  [INSTALL] $appDisplayId (driver: $driver)" -ForegroundColor Green
+                } else {
+                    Write-Host "  [INSTALL] $appDisplayId (driver: $driver)" -ForegroundColor Green
+                }
                 $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $false
                 
                 if ($result.Success) {
@@ -1048,6 +1160,20 @@ function Invoke-ApplyCore {
                     $failed++
                 }
             }
+            
+            # Update progress
+            if ($useProgress) {
+                $progressState.RunningApps = @()
+                $progressState.CompletedCount++
+                if (-not $result.Success) {
+                    $progressState.FailedCount++
+                }
+                Show-Progress -State $progressState -Force
+            }
+        }
+        
+        if ($useProgress) {
+            Complete-ProgressTracking -State $progressState
         }
     }
     
