@@ -107,6 +107,8 @@ automation-suite/
 ├── provisioning/           # Machine provisioning system
 │   ├── cli.ps1             # CLI entrypoint
 │   ├── engine/             # Core logic (manifest, plan, apply, verify, state, logging)
+│   ├── modules/            # Config module catalog
+│   │   └── apps/           # App-specific config modules (module.jsonc)
 │   ├── drivers/            # Software installers (winget.ps1)
 │   ├── restorers/          # Config restoration (copy, merge-json, merge-ini, append)
 │   ├── verifiers/          # State verification (file-exists)
@@ -659,6 +661,54 @@ Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
 }
 ```
 
+
+### Config Modules (v1)
+
+Config modules provide reusable restore/verify configurations for applications.
+
+**Location:** `provisioning/modules/apps/<app>/module.jsonc`
+
+**Manifest Field:**
+```jsonc
+{
+  "configModules": ["apps.git", "apps.vscodium"]
+}
+```
+
+**Module Schema:**
+```jsonc
+{
+  "id": "apps.git",
+  "displayName": "Git",
+  "sensitivity": "low",  // low | sensitive | machineBound
+  "matches": {
+    "winget": ["Git.Git"],
+    "exe": ["git.exe"],
+    "uninstallDisplayName": ["^Git\\b"]
+  },
+  "verify": [
+    { "type": "command-exists", "command": "git" },
+    { "type": "file-exists", "path": "~/.gitconfig" }
+  ],
+  "restore": [
+    { "type": "copy", "source": "./payloads/.gitconfig", "target": "~/.gitconfig", "backup": true }
+  ]
+}
+```
+
+**Behavior:**
+- When a manifest has `configModules`, the engine expands them into `restore[]` and `verify[]` items
+- Expansion happens after includes are resolved, before apply/verify executes
+- Unknown module IDs cause a clear error listing available modules
+- Expanded items are marked with `_fromModule` for traceability
+
+**Discovery Integration:**
+- `capture --discover` shows available config modules for detected apps
+- Matching uses winget IDs, exe names in PATH, and registry uninstall display names
+
+**Seed Modules:**
+- `apps.git` - Git version control (verify: command-exists git, file-exists ~/.gitconfig)
+- `apps.vscodium` - VSCodium editor (verify: command-exists codium, file-exists settings.json)
 ### Restore Types
 
 | Type | Format | Description |
