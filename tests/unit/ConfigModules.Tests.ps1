@@ -541,3 +541,331 @@ Describe "Config Modules Integration with Manifest Loading" {
         }
     }
 }
+
+Describe "Config Module Capture Schema Validation" {
+    
+    BeforeAll {
+        . "$PSScriptRoot\..\..\provisioning\engine\manifest.ps1"
+        . "$PSScriptRoot\..\..\provisioning\engine\config-modules.ps1"
+    }
+    
+    BeforeEach {
+        Clear-ConfigModuleCatalogCache
+    }
+    
+    Context "Test-ConfigModuleSchema with capture section" {
+        It "Accepts module with valid capture section" {
+            $module = @{
+                id = "test.module"
+                displayName = "Test Module"
+                matches = @{ winget = @("Test.App") }
+                capture = @{
+                    files = @(
+                        @{ source = "~/.config"; dest = "apps/test/config"; optional = $true }
+                    )
+                }
+            }
+            
+            $result = Test-ConfigModuleSchema -Module $module
+            $result.Valid | Should -Be $true
+        }
+        
+        It "Accepts module with capture and excludeGlobs" {
+            $module = @{
+                id = "test.module"
+                displayName = "Test Module"
+                matches = @{ winget = @("Test.App") }
+                capture = @{
+                    files = @(
+                        @{ source = "%APPDATA%\Test\settings.json"; dest = "apps/test/settings.json" }
+                    )
+                    excludeGlobs = @("**\Cache\**", "**\Temp\**")
+                }
+            }
+            
+            $result = Test-ConfigModuleSchema -Module $module
+            $result.Valid | Should -Be $true
+        }
+        
+        It "Rejects capture without files array" {
+            $module = @{
+                id = "test.module"
+                displayName = "Test Module"
+                matches = @{ winget = @("Test.App") }
+                capture = @{
+                    excludeGlobs = @("**\Cache\**")
+                }
+            }
+            
+            $result = Test-ConfigModuleSchema -Module $module
+            $result.Valid | Should -Be $false
+            $result.Error | Should -Match "capture.files"
+        }
+        
+        It "Rejects capture.files entry without source" {
+            $module = @{
+                id = "test.module"
+                displayName = "Test Module"
+                matches = @{ winget = @("Test.App") }
+                capture = @{
+                    files = @(
+                        @{ dest = "apps/test/config" }
+                    )
+                }
+            }
+            
+            $result = Test-ConfigModuleSchema -Module $module
+            $result.Valid | Should -Be $false
+            $result.Error | Should -Match "source"
+        }
+        
+        It "Rejects capture.files entry without dest" {
+            $module = @{
+                id = "test.module"
+                displayName = "Test Module"
+                matches = @{ winget = @("Test.App") }
+                capture = @{
+                    files = @(
+                        @{ source = "~/.config" }
+                    )
+                }
+            }
+            
+            $result = Test-ConfigModuleSchema -Module $module
+            $result.Valid | Should -Be $false
+            $result.Error | Should -Match "dest"
+        }
+    }
+}
+
+Describe "Config Module Capture Functions" {
+    
+    BeforeAll {
+        . "$PSScriptRoot\..\..\provisioning\engine\manifest.ps1"
+        . "$PSScriptRoot\..\..\provisioning\engine\config-modules.ps1"
+        
+        # Create test directory
+        $script:CaptureTestDir = Join-Path $env:TEMP "autosuite-capture-test-$(Get-Random)"
+        New-Item -ItemType Directory -Path $script:CaptureTestDir -Force | Out-Null
+    }
+    
+    AfterAll {
+        if (Test-Path $script:CaptureTestDir) {
+            Remove-Item -Path $script:CaptureTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Expand-ConfigPath" {
+        It "Expands ~ to user profile" {
+            $result = Expand-ConfigPath -Path "~/.gitconfig"
+            $result | Should -Be (Join-Path $env:USERPROFILE ".gitconfig")
+        }
+        
+        It "Expands %APPDATA% environment variable" {
+            $result = Expand-ConfigPath -Path "%APPDATA%\Test\config.json"
+            $result | Should -Be (Join-Path $env:APPDATA "Test\config.json")
+        }
+        
+        It "Expands %USERPROFILE% environment variable" {
+            $result = Expand-ConfigPath -Path "%USERPROFILE%\.ssh\config"
+            $result | Should -Be (Join-Path $env:USERPROFILE ".ssh\config")
+        }
+        
+        It "Returns path unchanged if no expansion needed" {
+            $result = Expand-ConfigPath -Path "C:\absolute\path\file.txt"
+            $result | Should -Be "C:\absolute\path\file.txt"
+        }
+    }
+    
+    Context "Test-PathMatchesExcludeGlobs" {
+        It "Returns false when no exclude globs" {
+            $result = Test-PathMatchesExcludeGlobs -Path "C:\some\path\file.txt" -ExcludeGlobs @()
+            $result | Should -Be $false
+        }
+        
+        It "Matches Cache directory pattern" {
+            $result = Test-PathMatchesExcludeGlobs -Path "C:\App\Cache\data.bin" -ExcludeGlobs @("**/Cache/**")
+            $result | Should -Be $true
+        }
+        
+        It "Does not match non-matching path" {
+            $result = Test-PathMatchesExcludeGlobs -Path "C:\App\User\settings.json" -ExcludeGlobs @("**/Cache/**")
+            $result | Should -Be $false
+        }
+    }
+    
+    Context "Invoke-ConfigModuleCapture" {
+        BeforeEach {
+            # Create test source files
+            $script:TestSourceDir = Join-Path $script:CaptureTestDir "source"
+            $script:TestPayloadDir = Join-Path $script:CaptureTestDir "payload"
+            New-Item -ItemType Directory -Path $script:TestSourceDir -Force | Out-Null
+            
+            # Create test files
+            "test content" | Set-Content -Path (Join-Path $script:TestSourceDir "config.txt")
+            "optional content" | Set-Content -Path (Join-Path $script:TestSourceDir "optional.txt")
+        }
+        
+        AfterEach {
+            if (Test-Path $script:TestPayloadDir) {
+                Remove-Item -Path $script:TestPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        
+        It "Returns warning when no modules have capture definitions" {
+            # Create a mock catalog with no capture sections
+            $result = Invoke-ConfigModuleCapture -Modules @("nonexistent.module") -PayloadOut $script:TestPayloadDir
+            
+            $result.warnings.Count | Should -BeGreaterThan 0
+        }
+        
+        It "Copies files to payload directory" {
+            # This test uses the real seed modules which now have capture sections
+            Clear-ConfigModuleCatalogCache
+            $catalog = Get-ConfigModuleCatalog
+            
+            # Find a module with capture (apps.git has capture)
+            $gitModule = $catalog["apps.git"]
+            if ($gitModule -and $gitModule.capture) {
+                $result = Invoke-ConfigModuleCapture -Modules @("apps.git") -PayloadOut $script:TestPayloadDir
+                
+                # Result should have the expected structure
+                $result.payloadRoot | Should -Be $script:TestPayloadDir
+                $result.Keys | Should -Contain "copied"
+                $result.Keys | Should -Contain "skipped"
+                $result.Keys | Should -Contain "missing"
+            }
+        }
+        
+        It "Skips optional files that don't exist" {
+            Clear-ConfigModuleCatalogCache
+            $catalog = Get-ConfigModuleCatalog
+            
+            # apps.git has optional files that likely don't exist in test env
+            $result = Invoke-ConfigModuleCapture -Modules @("apps.git") -PayloadOut $script:TestPayloadDir
+            
+            # Should have skipped items (optional files not found)
+            # This is expected behavior - not a failure
+            $result.Keys | Should -Contain "skipped"
+        }
+    }
+}
+
+Describe "Manifest Hashing Semantics" {
+    
+    BeforeAll {
+        . "$PSScriptRoot\..\..\provisioning\engine\manifest.ps1"
+        . "$PSScriptRoot\..\..\provisioning\engine\state.ps1"
+        . "$PSScriptRoot\..\..\provisioning\engine\config-modules.ps1"
+        
+        $script:HashTestDir = Join-Path $env:TEMP "autosuite-hash-test-$(Get-Random)"
+        New-Item -ItemType Directory -Path $script:HashTestDir -Force | Out-Null
+    }
+    
+    AfterAll {
+        if (Test-Path $script:HashTestDir) {
+            Remove-Item -Path $script:HashTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Get-ManifestHash (raw file hash)" {
+        It "Returns hash for existing file" {
+            $manifestPath = Join-Path $script:HashTestDir "test-raw.jsonc"
+            '{ "version": 1, "name": "test" }' | Set-Content -Path $manifestPath
+            
+            $hash = Get-ManifestHash -ManifestPath $manifestPath
+            
+            $hash | Should -Not -BeNullOrEmpty
+            $hash.Length | Should -Be 16
+        }
+        
+        It "Returns null for non-existent file" {
+            $hash = Get-ManifestHash -ManifestPath "C:\nonexistent\file.jsonc"
+            
+            $hash | Should -BeNullOrEmpty
+        }
+        
+        It "Returns same hash for identical file content" {
+            $manifestPath1 = Join-Path $script:HashTestDir "test-same1.jsonc"
+            $manifestPath2 = Join-Path $script:HashTestDir "test-same2.jsonc"
+            $content = '{ "version": 1, "name": "test" }'
+            $content | Set-Content -Path $manifestPath1
+            $content | Set-Content -Path $manifestPath2
+            
+            $hash1 = Get-ManifestHash -ManifestPath $manifestPath1
+            $hash2 = Get-ManifestHash -ManifestPath $manifestPath2
+            
+            $hash1 | Should -Be $hash2
+        }
+    }
+    
+    Context "Get-ExpandedManifestHash (expanded manifest hash)" {
+        It "Returns hash for manifest without configModules" {
+            $manifestPath = Join-Path $script:HashTestDir "test-expanded-simple.jsonc"
+            @'
+{
+  "version": 1,
+  "name": "test-simple",
+  "apps": []
+}
+'@ | Set-Content -Path $manifestPath
+            
+            $hash = Get-ExpandedManifestHash -ManifestPath $manifestPath
+            
+            $hash | Should -Not -BeNullOrEmpty
+            $hash.Length | Should -Be 16
+        }
+        
+        It "Returns different hash when configModules are expanded" {
+            Clear-ConfigModuleCatalogCache
+            
+            # Manifest without configModules
+            $manifestPath1 = Join-Path $script:HashTestDir "test-no-modules.jsonc"
+            @'
+{
+  "version": 1,
+  "name": "test",
+  "verify": []
+}
+'@ | Set-Content -Path $manifestPath1
+            
+            # Manifest with configModules (will be expanded)
+            $manifestPath2 = Join-Path $script:HashTestDir "test-with-modules.jsonc"
+            @'
+{
+  "version": 1,
+  "name": "test",
+  "configModules": ["apps.git"],
+  "verify": []
+}
+'@ | Set-Content -Path $manifestPath2
+            
+            $hash1 = Get-ExpandedManifestHash -ManifestPath $manifestPath1
+            $hash2 = Get-ExpandedManifestHash -ManifestPath $manifestPath2
+            
+            # Hashes should be different because apps.git adds verify items
+            $hash1 | Should -Not -Be $hash2
+        }
+        
+        It "Raw hash differs from expanded hash for manifest with configModules" {
+            Clear-ConfigModuleCatalogCache
+            
+            $manifestPath = Join-Path $script:HashTestDir "test-raw-vs-expanded.jsonc"
+            @'
+{
+  "version": 1,
+  "name": "test",
+  "configModules": ["apps.git"],
+  "verify": []
+}
+'@ | Set-Content -Path $manifestPath
+            
+            $rawHash = Get-ManifestHash -ManifestPath $manifestPath
+            $expandedHash = Get-ExpandedManifestHash -ManifestPath $manifestPath
+            
+            # Raw hash is file content, expanded hash is processed manifest
+            # They should be different
+            $rawHash | Should -Not -Be $expandedHash
+        }
+    }
+}

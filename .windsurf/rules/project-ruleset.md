@@ -662,9 +662,9 @@ Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
 ```
 
 
-### Config Modules (v1)
+### Config Modules (v1.1)
 
-Config modules provide reusable restore/verify configurations for applications.
+Config modules provide reusable restore/verify/capture configurations for applications.
 
 **Location:** `provisioning/modules/apps/<app>/module.jsonc`
 
@@ -675,7 +675,7 @@ Config modules provide reusable restore/verify configurations for applications.
 }
 ```
 
-**Module Schema:**
+**Module Schema (v1.1):**
 ```jsonc
 {
   "id": "apps.git",
@@ -691,10 +691,38 @@ Config modules provide reusable restore/verify configurations for applications.
     { "type": "file-exists", "path": "~/.gitconfig" }
   ],
   "restore": [
-    { "type": "copy", "source": "./payloads/.gitconfig", "target": "~/.gitconfig", "backup": true }
-  ]
+    { "type": "copy", "source": "./payload/apps/git/.gitconfig", "target": "~/.gitconfig", "backup": true }
+  ],
+  "capture": {
+    "files": [
+      { "source": "~/.gitconfig", "dest": "apps/git/.gitconfig", "optional": true },
+      { "source": "~/.gitattributes", "dest": "apps/git/.gitattributes", "optional": true }
+    ],
+    "excludeGlobs": ["**\\Cache\\**", "**\\GPUCache\\**"]  // optional
+  }
 }
 ```
+
+**Capture Section (v1.1):**
+- `capture.files[]` - Array of file mappings to capture
+  - `source` - Source path (supports `~`, `%APPDATA%`, env vars)
+  - `dest` - Relative destination path inside payload directory
+  - `optional` - If true, skip silently when source missing (default: false)
+- `capture.excludeGlobs[]` - Optional glob patterns to exclude (e.g., cache directories)
+
+**Capture Command:**
+```powershell
+# Capture config files from matched modules (uses discovery)
+.\cli.ps1 -Command capture -Profile my-machine -WithConfig
+
+# Capture from specific modules
+.\cli.ps1 -Command capture -Profile my-machine -WithConfig -ConfigModules apps.git,apps.vscodium
+
+# Custom payload output directory
+.\cli.ps1 -Command capture -Profile my-machine -WithConfig -PayloadOut .\my-payload
+```
+
+**Default Payload Output:** `provisioning/payload/`
 
 **Behavior:**
 - When a manifest has `configModules`, the engine expands them into `restore[]` and `verify[]` items
@@ -706,9 +734,14 @@ Config modules provide reusable restore/verify configurations for applications.
 - `capture --discover` shows available config modules for detected apps
 - Matching uses winget IDs, exe names in PATH, and registry uninstall display names
 
+**Manifest Hashing:**
+- `Get-ManifestHash` - Hash of raw manifest file on disk
+- `Get-ExpandedManifestHash` - Hash of fully expanded manifest (includes resolved, configModules expanded)
+- Use expanded hash for drift detection when configModules are in use
+
 **Seed Modules:**
-- `apps.git` - Git version control (verify: command-exists git, file-exists ~/.gitconfig)
-- `apps.vscodium` - VSCodium editor (verify: command-exists codium, file-exists settings.json)
+- `apps.git` - Git (verify: git command, ~/.gitconfig; capture: .gitconfig, .gitattributes)
+- `apps.vscodium` - VSCodium (verify: codium command, settings.json; capture: settings.json, keybindings.json)
 ### Restore Types
 
 | Type | Format | Description |
