@@ -1243,7 +1243,11 @@ function Invoke-SanitizeManifest {
 
 #endregion Bundle D - Sanitization Helpers
 
-function Invoke-Capture {
+function Invoke-CaptureCore {
+    <#
+    .SYNOPSIS
+        Core capture logic. Returns structured result only - no stream output.
+    #>
     param(
         [string]$OutputPath,
         [bool]$IsExample,
@@ -1252,8 +1256,6 @@ function Invoke-Capture {
         [string]$CustomExamplesDir,
         [bool]$ForceOverwrite
     )
-    
-    Write-Output "[autosuite] Capture: starting..."
     
     # Determine effective examples directory
     $effectiveExamplesDir = if ($CustomExamplesDir) {
@@ -1265,10 +1267,9 @@ function Invoke-Capture {
     # Legacy -Example flag: generate static example manifest
     if ($IsExample -and -not $IsSanitize) {
         $examplePath = if ($OutputPath) { $OutputPath } else { Join-Path $script:AutosuiteRoot "provisioning\manifests\example.jsonc" }
-        Write-Output "[autosuite] Capture: generating example manifest"
         $null = Write-ExampleManifest -Path $examplePath
         Write-Host "[autosuite] Capture: example manifest written to $examplePath" -ForegroundColor Green
-        return @{ Success = $true; OutputPath = $examplePath; Sanitized = $false }
+        return @{ Success = $true; OutputPath = $examplePath; Sanitized = $false; IsExample = $true }
     }
     
     # Determine output path based on flags
@@ -1305,25 +1306,18 @@ function Invoke-Capture {
     if ($isExamplesTarget -and -not $IsSanitize) {
         Write-Host "[ERROR] Cannot write non-sanitized capture to examples directory." -ForegroundColor Red
         Write-Host "        Use -Sanitize flag or choose a different output path." -ForegroundColor Yellow
-        Write-Output "[autosuite] Capture: BLOCKED - non-sanitized write to examples directory"
-        return @{ Success = $false; Error = "Non-sanitized write to examples directory blocked" }
+        return @{ Success = $false; Error = "Non-sanitized write to examples directory blocked"; Blocked = $true }
     }
     
     # GUARDRAIL: Prevent overwrite of existing example manifests without -Force
     if ($isExamplesTarget -and (Test-Path $outPath) -and -not $ForceOverwrite) {
         Write-Host "[ERROR] Example manifest already exists: $outPath" -ForegroundColor Red
         Write-Host "        Use -Force to overwrite existing example manifests." -ForegroundColor Yellow
-        Write-Output "[autosuite] Capture: BLOCKED - example manifest exists, use -Force to overwrite"
-        return @{ Success = $false; Error = "Example manifest exists, use -Force to overwrite"; ExitCode = 1 }
+        return @{ Success = $false; Error = "Example manifest exists, use -Force to overwrite"; ExitCode = 1; Blocked = $true }
     }
     
-    # Output path info to console (visible) and via Write-Output (for test capture)
-    Write-Host "[autosuite] Capture: output path is $outPath"
-    Write-Output "[autosuite] Capture: output path is $outPath"
-    
     if ($IsSanitize) {
-        Write-Host "[autosuite] Capture: sanitization enabled"
-        Write-Output "[autosuite] Capture: sanitization enabled"
+        Write-Host "[autosuite] Capture: sanitization enabled" -ForegroundColor Cyan
         
         # First capture to a temp location
         $tempDir = Join-Path $env:TEMP "autosuite-capture-$([guid]::NewGuid().ToString('N').Substring(0,8))"
@@ -1376,8 +1370,6 @@ function Invoke-Capture {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         
         Write-Host "[autosuite] Capture: sanitized manifest written to $outPath" -ForegroundColor Green
-        Write-Host "[autosuite] Capture: completed (sanitized, $($sanitizedManifest.apps.Count) apps)"
-        Write-Output "[autosuite] Capture: completed (sanitized, $($sanitizedManifest.apps.Count) apps)"
         
         return @{ 
             Success = $true
@@ -1391,18 +1383,19 @@ function Invoke-Capture {
     $cliArgs = @{ OutManifest = $outPath }
     $null = Invoke-ProvisioningCli -ProvisioningCommand "capture" -Arguments $cliArgs
     
-    Write-Host "[autosuite] Capture: completed"
-    Write-Output "[autosuite] Capture: completed"
     return @{ Success = $true; OutputPath = $outPath; Sanitized = $false }
 }
 
 function Invoke-VerifyCore {
+    <#
+    .SYNOPSIS
+        Core verify logic. Returns structured result only - no stream output.
+    #>
     param(
         [string]$ManifestPath,
         [switch]$SkipStateWrite
     )
     
-    Write-Output "[autosuite] Verify: checking manifest $ManifestPath"
     $manifest = Read-Manifest -Path $ManifestPath
     
     if (-not $manifest) {
@@ -1490,12 +1483,6 @@ function Invoke-VerifyCore {
     Write-Host "  Missing:            $missingCount" -ForegroundColor $(if ($missingCount -gt 0) { "Red" } else { "Green" })
     Write-Host "  Version Mismatches: $versionMismatchCount" -ForegroundColor $(if ($versionMismatchCount -gt 0) { "Yellow" } else { "Green" })
     
-    # Output summary via Write-Output for test capture
-    Write-Output "[autosuite] Verify: OkCount=$okCount MissingCount=$missingCount VersionMismatches=$versionMismatchCount ExtraCount=$extraCount"
-    
-    # Emit drift summary
-    Write-Output "[autosuite] Drift: Missing=$missingCount Extra=$extraCount VersionMismatches=$versionMismatchCount"
-    
     # Update state (unless skipped, e.g., during tests with no state dir)
     if (-not $SkipStateWrite) {
         $manifestHash = Get-ManifestHash -Path $ManifestPath
@@ -1554,7 +1541,6 @@ function Invoke-VerifyCore {
     }
     
     if (-not $overallSuccess) {
-        Write-Output "[autosuite] Verify: FAILED"
         return @{ 
             Success = $false
             ExitCode = 1
@@ -1567,7 +1553,6 @@ function Invoke-VerifyCore {
         }
     }
     
-    Write-Output "[autosuite] Verify: PASSED"
     return @{ 
         Success = $true
         ExitCode = 0
@@ -1590,17 +1575,18 @@ function Invoke-PlanCore {
 }
 
 function Invoke-ReportCore {
+    <#
+    .SYNOPSIS
+        Core report logic. Returns structured result only - no stream output.
+    #>
     param(
         [string]$ManifestPath,
         [bool]$OutputJson
     )
     
-    Write-Output "[autosuite] Report: reading state..."
-    
     $state = Read-AutosuiteState
     
     if (-not $state) {
-        Write-Output "[autosuite] Report: no state found"
         Write-Host "No autosuite state found. Run 'apply' or 'verify' to create state." -ForegroundColor Yellow
         return @{ Success = $true; ExitCode = 0; HasState = $false }
     }
@@ -1664,22 +1650,23 @@ function Invoke-ReportCore {
         if ($drift.Success) {
             Write-Host "  Missing: $($drift.MissingCount)"
             Write-Host "  Extra:   $($drift.ExtraCount)"
-            Write-Output "[autosuite] Drift: Missing=$($drift.MissingCount) Extra=$($drift.ExtraCount) VersionMismatches=0"
         } else {
             Write-Host "  Error computing drift: $($drift.Error)" -ForegroundColor Red
         }
     }
     
-    Write-Output "[autosuite] Report: completed"
     return @{ Success = $true; ExitCode = 0; HasState = $true }
 }
 
 function Invoke-DoctorCore {
+    <#
+    .SYNOPSIS
+        Core doctor logic. Returns structured result only - no stream output.
+    #>
     param(
         [string]$ManifestPath
     )
     
-    Write-Output "[autosuite] Doctor: checking environment..."
     Write-Host ""
     Write-Host "=== Autosuite Doctor ===" -ForegroundColor Cyan
     Write-Host ""
@@ -1743,7 +1730,6 @@ function Invoke-DoctorCore {
                     Write-Host "    Suggestion: Update manifest to include observed extras" -ForegroundColor Cyan
                 }
             }
-            Write-Output "[autosuite] Drift: Missing=$($drift.MissingCount) Extra=$($drift.ExtraCount) VersionMismatches=0"
             $driftMissing = $drift.MissingCount
             $driftExtra = $drift.ExtraCount
         } else {
@@ -1752,31 +1738,27 @@ function Invoke-DoctorCore {
         Write-Host ""
     }
     
-    # Emit stable summary marker for tests
-    Write-Output "[autosuite] Doctor: state=$stateStatus driftMissing=$driftMissing driftExtra=$driftExtra"
-    
     # Delegate to provisioning doctor for additional checks
     Write-Host "Provisioning Subsystem:" -ForegroundColor Yellow
     $provResult = Invoke-ProvisioningCli -ProvisioningCommand "doctor" -Arguments @{}
     
-    Write-Output "[autosuite] Doctor: completed"
-    return @{ Success = $true; ExitCode = 0; HasState = $hasState }
+    return @{ Success = $true; ExitCode = 0; HasState = $hasState; StateStatus = $stateStatus; DriftMissing = $driftMissing; DriftExtra = $driftExtra }
 }
 
 function Invoke-StateResetCore {
-    Write-Output "[autosuite] State: resetting..."
-    
+    <#
+    .SYNOPSIS
+        Core state reset logic. Returns structured result only - no stream output.
+    #>
     $statePath = Get-AutosuiteStatePath
     
     if (-not (Test-Path $statePath)) {
-        Write-Output "[autosuite] State: no state file to reset"
         Write-Host "No state file found at $statePath" -ForegroundColor Yellow
         return @{ Success = $true; ExitCode = 0; WasReset = $false }
     }
     
     try {
         Remove-Item -Path $statePath -Force -ErrorAction Stop
-        Write-Output "[autosuite] State: reset completed"
         Write-Host "State file deleted: $statePath" -ForegroundColor Green
         return @{ Success = $true; ExitCode = 0; WasReset = $true }
     } catch {
@@ -1819,7 +1801,18 @@ $exitCode = 0
 
 switch ($Command) {
     "capture" {
-        $captureResult = Invoke-Capture -OutputPath $Out -IsExample $Example.IsPresent -IsSanitize $Sanitize.IsPresent -ManifestName $Name -CustomExamplesDir $ExamplesDir -ForceOverwrite $Force.IsPresent
+        Write-Information "[autosuite] Capture: starting..." -InformationAction Continue
+        $captureResult = Invoke-CaptureCore -OutputPath $Out -IsExample $Example.IsPresent -IsSanitize $Sanitize.IsPresent -ManifestName $Name -CustomExamplesDir $ExamplesDir -ForceOverwrite $Force.IsPresent
+        if ($captureResult.OutputPath) {
+            Write-Information "[autosuite] Capture: output path is $($captureResult.OutputPath)" -InformationAction Continue
+        }
+        if ($captureResult.Blocked) {
+            Write-Information "[autosuite] Capture: BLOCKED - $($captureResult.Error)" -InformationAction Continue
+        }
+        if ($captureResult.Success) {
+            $completedMsg = if ($captureResult.Sanitized) { "completed (sanitized, $($captureResult.AppCount) apps)" } else { "completed" }
+            Write-Information "[autosuite] Capture: $completedMsg" -InformationAction Continue
+        }
         if ($captureResult -and $captureResult.ExitCode) {
             $exitCode = $captureResult.ExitCode
         } elseif ($captureResult -and -not $captureResult.Success) {
@@ -1831,7 +1824,9 @@ switch ($Command) {
         if (-not $resolvedPath) {
             exit 1
         }
+        Write-Information "[autosuite] Apply: starting with manifest $resolvedPath" -InformationAction Continue
         $result = Invoke-ApplyCore -ManifestPath $resolvedPath -IsDryRun $DryRun.IsPresent -IsOnlyApps $OnlyApps.IsPresent
+        Write-Information "[autosuite] Apply: completed ExitCode=$($result.ExitCode)" -InformationAction Continue
         $exitCode = $result.ExitCode
     }
     "verify" {
@@ -1839,7 +1834,12 @@ switch ($Command) {
         if (-not $resolvedPath) {
             exit 1
         }
+        Write-Information "[autosuite] Verify: checking manifest $resolvedPath" -InformationAction Continue
         $result = Invoke-VerifyCore -ManifestPath $resolvedPath
+        Write-Information "[autosuite] Verify: OkCount=$($result.OkCount) MissingCount=$($result.MissingCount) VersionMismatches=$($result.VersionMismatches) ExtraCount=$($result.ExtraCount)" -InformationAction Continue
+        Write-Information "[autosuite] Drift: Missing=$($result.MissingCount) Extra=$($result.ExtraCount) VersionMismatches=$($result.VersionMismatches)" -InformationAction Continue
+        $passedFailed = if ($result.Success) { "PASSED" } else { "FAILED" }
+        Write-Information "[autosuite] Verify: $passedFailed" -InformationAction Continue
         $exitCode = $result.ExitCode
     }
     "plan" {
@@ -1851,17 +1851,32 @@ switch ($Command) {
         $exitCode = $result.ExitCode
     }
     "report" {
+        Write-Information "[autosuite] Report: reading state..." -InformationAction Continue
         $result = Invoke-ReportCore -ManifestPath $Manifest -OutputJson $Json.IsPresent
+        if ($result.HasState) {
+            Write-Information "[autosuite] Report: completed" -InformationAction Continue
+        } else {
+            Write-Information "[autosuite] Report: no state found" -InformationAction Continue
+        }
         $exitCode = $result.ExitCode
     }
     "doctor" {
+        Write-Information "[autosuite] Doctor: checking environment..." -InformationAction Continue
         $result = Invoke-DoctorCore -ManifestPath $Manifest
+        Write-Information "[autosuite] Doctor: state=$($result.StateStatus) driftMissing=$($result.DriftMissing) driftExtra=$($result.DriftExtra)" -InformationAction Continue
+        Write-Information "[autosuite] Doctor: completed" -InformationAction Continue
         $exitCode = $result.ExitCode
     }
     "state" {
         switch ($SubCommand) {
             "reset" {
+                Write-Information "[autosuite] State: resetting..." -InformationAction Continue
                 $result = Invoke-StateResetCore
+                if ($result.WasReset) {
+                    Write-Information "[autosuite] State: reset completed" -InformationAction Continue
+                } else {
+                    Write-Information "[autosuite] State: no state file to reset" -InformationAction Continue
+                }
                 $exitCode = $result.ExitCode
             }
             default {

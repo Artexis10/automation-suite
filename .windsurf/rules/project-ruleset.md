@@ -670,12 +670,70 @@ autosuite verify -Manifest provisioning/manifests/examples/example-windows-core.
 [autosuite] Capture: BLOCKED - non-sanitized write to examples directory
 [autosuite] Capture: BLOCKED - example manifest exists, use -Force to overwrite
 `
+
+---
+
+## Output Stream Hygiene (Bundle D.1)
+
+Stable wrapper lines are emitted via **Write-Information** (stream 6), not Write-Output or Write-Host.
+
+### Stream Usage Convention
+
+| Stream | Purpose | Capture |
+|--------|---------|---------|
+| **Information (6)** | Stable wrapper lines for automation/testing | `6>&1` |
+| **Host** | Cosmetic UI elements (colors, formatting) | Not captured |
+| **Success (1)** | Structured return objects from Core functions | Direct assignment |
+
+### Stable Wrapper Line Format
+
+`
+[autosuite] Capture: starting...
+[autosuite] Capture: output path is <path>
+[autosuite] Capture: completed
+[autosuite] Apply: starting with manifest <path>
+[autosuite] Apply: completed ExitCode=<n>
+[autosuite] Verify: checking manifest <path>
+[autosuite] Verify: OkCount=<n> MissingCount=<n> VersionMismatches=<n> ExtraCount=<n>
+[autosuite] Verify: PASSED|FAILED
+[autosuite] Drift: Missing=<n> Extra=<n> VersionMismatches=<n>
+[autosuite] Doctor: checking environment...
+[autosuite] Doctor: state=<present|absent> driftMissing=<n> driftExtra=<n>
+[autosuite] Doctor: completed
+[autosuite] Report: reading state...
+[autosuite] Report: completed|no state found
+[autosuite] State: resetting...
+[autosuite] State: reset completed|no state file to reset
+`
+
+### Capturing Stable Lines
+
+For automation or testing, capture the Information stream:
+
+`powershell
+# Capture Information stream to success stream
+$output = & .\autosuite.ps1 verify -Manifest manifest.jsonc 6>&1
+$outputStr = $output -join "`n"
+
+# Check for specific markers
+$outputStr | Should -Match "\[autosuite\] Verify: PASSED"
+`
+
+### Core Function Design
+
+Core functions (`*Core`) return **structured objects only**:
+- No `Write-Output` for wrapper lines
+- No `Write-Host` for stable markers
+- Return hashtables with `Success`, `ExitCode`, and command-specific fields
+
+CLI layer emits stable wrapper lines via `Write-Information -InformationAction Continue`.
 ## References
 
 - [provisioning/readme.md](../provisioning/readme.md) - Full provisioning architecture
 - [contributing.md](../contributing.md) - Development conventions
 - [roadmap.md](../roadmap.md) - Future development plans
 - [tool-index.md](../tool-index.md) - Complete script index
+
 
 
 
