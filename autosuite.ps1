@@ -537,14 +537,21 @@ function Install-AutosuiteToPath {
         Write-Host "[OK] Directory exists: $binDir" -ForegroundColor DarkGray
     }
     
-    # Copy autosuite.ps1 to bin directory
-    $sourceScript = $PSCommandPath
-    if (Test-Path $cliEntrypoint) {
-        Write-Host "[UPDATE] Updating CLI entrypoint: $cliEntrypoint" -ForegroundColor Yellow
-    } else {
-        Write-Host "[INSTALL] Installing CLI entrypoint: $cliEntrypoint" -ForegroundColor Green
+    # Install thin shim to bin directory
+    $shimTemplatePath = Join-Path $script:AutosuiteRoot "provisioning\engine\shim-template.ps1"
+    
+    if (-not (Test-Path $shimTemplatePath)) {
+        Write-Host "[ERROR] Shim template not found: $shimTemplatePath" -ForegroundColor Red
+        Write-Host "       Bootstrap cannot continue. Verify repo integrity." -ForegroundColor Yellow
+        return @{ Success = $false; ExitCode = 1; Error = "Shim template not found" }
     }
-    Copy-Item -Path $sourceScript -Destination $cliEntrypoint -Force
+    
+    if (Test-Path $cliEntrypoint) {
+        Write-Host "[UPDATE] Updating CLI shim: $cliEntrypoint" -ForegroundColor Yellow
+    } else {
+        Write-Host "[INSTALL] Installing CLI shim: $cliEntrypoint" -ForegroundColor Green
+    }
+    Copy-Item -Path $shimTemplatePath -Destination $cliEntrypoint -Force
     
     # Create CMD shim
     $shimContent = @"
