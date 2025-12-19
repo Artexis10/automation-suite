@@ -60,6 +60,10 @@ param(
     [switch]$LoadFunctionsOnly,
 
     [Parameter(Mandatory = $false)]
+    [Alias("v")]
+    [switch]$Version,
+
+    [Parameter(Mandatory = $false)]
     [string]$Profile,
 
     [Parameter(Mandatory = $false)]
@@ -111,7 +115,52 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script:AutosuiteRoot = $PSScriptRoot
-$script:Version = "v0"
+
+function Get-AutosuiteVersion {
+    <#
+    .SYNOPSIS
+        Returns the current version of Automation Suite.
+    .DESCRIPTION
+        If provisioning/VERSION.txt exists (release build), returns its content.
+        Otherwise returns dev version: 0.0.0-dev+<short git sha>
+    #>
+    $versionFile = Join-Path $script:AutosuiteRoot "provisioning\VERSION.txt"
+    
+    if (Test-Path $versionFile) {
+        $version = (Get-Content -Path $versionFile -Raw).Trim()
+        return $version
+    }
+    
+    # Dev version: try to get git sha
+    try {
+        $gitSha = git rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $gitSha) {
+            return "0.0.0-dev+$gitSha"
+        }
+    } catch {
+        # Git not available
+    }
+    
+    return "0.0.0-dev"
+}
+
+function Get-GitSha {
+    <#
+    .SYNOPSIS
+        Returns the current git commit SHA (short form), or $null if unavailable.
+    #>
+    try {
+        $gitSha = git rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $gitSha) {
+            return $gitSha.Trim()
+        }
+    } catch {
+        # Git not available
+    }
+    return $null
+}
+
+$script:VersionString = Get-AutosuiteVersion
 
 # Allow override of provisioning CLI path for testing
 $script:ProvisioningCliPath = if ($env:AUTOSUITE_PROVISIONING_CLI) {
@@ -319,7 +368,7 @@ function Compute-Drift {
 
 function Show-Banner {
     Write-Host ""
-    Write-Host "Automation Suite - $script:Version" -ForegroundColor Cyan
+    Write-Host "Automation Suite - $script:VersionString" -ForegroundColor Cyan
     Write-Host ""
 }
 
@@ -1788,6 +1837,12 @@ function Resolve-ManifestPathWithValidation {
 # Main execution - skip if loading functions only (for testing)
 if ($LoadFunctionsOnly) {
     return
+}
+
+# Handle --version flag before anything else
+if ($Version.IsPresent) {
+    Write-Host $script:VersionString
+    exit 0
 }
 
 Show-Banner

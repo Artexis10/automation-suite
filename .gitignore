@@ -11,16 +11,20 @@ ENV/
 dist/
 build/
 
-# Data files
+# Data files (general)
 *.csv
 *.xlsx
-*.json
 *.db
 *.sqlite
 
-# Logs
+# Logs (general)
 *.log
-logs/
+
+# Provisioning generated outputs (not committed)
+provisioning/logs/
+provisioning/plans/
+provisioning/state/
+provisioning/capture/
 
 # OS
 .DS_Store
@@ -65,3 +69,6 @@ provisioning/manifests/local/
 outputs/*.pdf
 outputs/*.docx
 outputs/*.zip
+
+# Release artifacts (generated at build time, not committed)
+provisioning/VERSION.txt
