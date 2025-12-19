@@ -158,20 +158,24 @@ Describe "Autosuite Root Orchestrator" {
             $env:AUTOSUITE_PROVISIONING_CLI = $null
         }
         
-        It "Emits stable delegation message for report" {
+        It "Emits stable wrapper message for report" {
             . $script:AutosuitePath -LoadFunctionsOnly
             $script:ProvisioningCliPath = $script:MockCliPath
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-delegation-test"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
             
-            $output = Invoke-ReportCore -IsLatest $true 4>&1
-            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
+            $output = Invoke-ReportCore -OutputJson $false 4>&1
+            $output | Should -Contain "[autosuite] Report: reading state..."
         }
         
-        It "Emits stable delegation message for doctor" {
+        It "Emits stable wrapper message for doctor" {
             . $script:AutosuitePath -LoadFunctionsOnly
             $script:ProvisioningCliPath = $script:MockCliPath
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-delegation-test"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
             
             $output = Invoke-DoctorCore 4>&1
-            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
+            $output | Should -Contain "[autosuite] Doctor: checking environment..."
         }
     }
 }
@@ -375,30 +379,338 @@ Describe "Autosuite Report and Doctor Commands" {
         }
     }
     
-    Context "Report Command" {
-        It "Forwards -Latest to provisioning" {
-            & $script:AutosuitePath report -Latest 2>&1 | Out-Null
+    Context "Report Command (in-process)" {
+        It "Returns no state found when state file does not exist" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            # Override state path to temp location
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-test"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
             
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "report"
-            $captured.Latest | Should -Be $true
+            # Ensure no state file exists
+            if (Test-Path $script:AutosuiteStatePath) {
+                Remove-Item $script:AutosuiteStatePath -Force
+            }
+            
+            $output = Invoke-ReportCore -OutputJson $false 4>&1
+            $output | Should -Contain "[autosuite] Report: no state found"
         }
         
-        It "Forwards -Json to provisioning" {
-            & $script:AutosuitePath report -Json 2>&1 | Out-Null
+        It "Emits stable wrapper lines" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-test"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
             
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "report"
-            $captured.Json | Should -Be $true
+            $output = Invoke-ReportCore -OutputJson $false 4>&1
+            $output | Should -Contain "[autosuite] Report: reading state..."
         }
     }
     
-    Context "Doctor Command" {
-        It "Forwards doctor command to provisioning" {
-            & $script:AutosuitePath doctor 2>&1 | Out-Null
+    Context "Doctor Command (in-process)" {
+        It "Emits stable wrapper lines" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:ProvisioningCliPath = $script:MockCliPath
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-test"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
             
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "doctor"
+            $output = Invoke-DoctorCore 4>&1
+            $output | Should -Contain "[autosuite] Doctor: checking environment..."
+            $output | Should -Contain "[autosuite] Doctor: completed"
+        }
+    }
+}
+
+Describe "Autosuite State Store (Bundle B)" {
+    
+    BeforeAll {
+        $script:TestStateDir = Join-Path $script:TestDir ".autosuite-state-test"
+    }
+    
+    BeforeEach {
+        # Clean up test state directory before each test
+        if (Test-Path $script:TestStateDir) {
+            Remove-Item $script:TestStateDir -Recurse -Force
+        }
+        
+        # Load functions and override state paths
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:AutosuiteStateDir = $script:TestStateDir
+        $script:AutosuiteStatePath = Join-Path $script:TestStateDir "state.json"
+    }
+    
+    AfterEach {
+        if (Test-Path $script:TestStateDir) {
+            Remove-Item $script:TestStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "State File Creation" {
+        It "Creates state directory if it does not exist" {
+            $state = New-AutosuiteState
+            $result = Write-AutosuiteStateAtomic -State $state
+            
+            $result | Should -Be $true
+            $script:TestStateDir | Should -Exist
+        }
+        
+        It "Creates state file with correct schema version" {
+            $state = New-AutosuiteState
+            Write-AutosuiteStateAtomic -State $state | Out-Null
+            
+            $script:AutosuiteStatePath | Should -Exist
+            $content = Get-Content $script:AutosuiteStatePath -Raw | ConvertFrom-Json
+            $content.schemaVersion | Should -Be 1
+        }
+        
+        It "Atomic write uses temp file then moves" {
+            $state = New-AutosuiteState
+            $state.lastApplied = @{ manifestPath = "test.jsonc"; manifestHash = "abc123"; timestampUtc = "2025-01-01T00:00:00Z" }
+            
+            $result = Write-AutosuiteStateAtomic -State $state
+            
+            $result | Should -Be $true
+            # Temp files should be cleaned up
+            $tempFiles = Get-ChildItem -Path $script:TestStateDir -Filter "state.tmp.*.json" -ErrorAction SilentlyContinue
+            $tempFiles.Count | Should -Be 0
+        }
+    }
+    
+    Context "State Read/Write" {
+        It "Read returns null when no state file exists" {
+            $state = Read-AutosuiteState
+            $state | Should -BeNullOrEmpty
+        }
+        
+        It "Read returns state after write" {
+            $state = New-AutosuiteState
+            $state.lastApplied = @{ manifestPath = "test.jsonc"; manifestHash = "abc123"; timestampUtc = "2025-01-01T00:00:00Z" }
+            Write-AutosuiteStateAtomic -State $state | Out-Null
+            
+            $readState = Read-AutosuiteState
+            $readState | Should -Not -BeNullOrEmpty
+            $readState.lastApplied.manifestPath | Should -Be "test.jsonc"
+            $readState.lastApplied.manifestHash | Should -Be "abc123"
+        }
+    }
+}
+
+Describe "Autosuite Manifest Hashing (Bundle B)" {
+    
+    BeforeAll {
+        $script:HashTestDir = Join-Path $script:TestDir "hash-test"
+        New-Item -ItemType Directory -Path $script:HashTestDir -Force | Out-Null
+    }
+    
+    BeforeEach {
+        . $script:AutosuitePath -LoadFunctionsOnly
+    }
+    
+    Context "Deterministic Hashing" {
+        It "Same content produces same hash" {
+            $manifest1 = Join-Path $script:HashTestDir "manifest1.jsonc"
+            $manifest2 = Join-Path $script:HashTestDir "manifest2.jsonc"
+            
+            $content = '{"version": 1, "apps": []}'
+            Set-Content -Path $manifest1 -Value $content
+            Set-Content -Path $manifest2 -Value $content
+            
+            $hash1 = Get-ManifestHash -Path $manifest1
+            $hash2 = Get-ManifestHash -Path $manifest2
+            
+            $hash1 | Should -Be $hash2
+        }
+        
+        It "Different content produces different hash" {
+            $manifest1 = Join-Path $script:HashTestDir "diff1.jsonc"
+            $manifest2 = Join-Path $script:HashTestDir "diff2.jsonc"
+            
+            Set-Content -Path $manifest1 -Value '{"version": 1}'
+            Set-Content -Path $manifest2 -Value '{"version": 2}'
+            
+            $hash1 = Get-ManifestHash -Path $manifest1
+            $hash2 = Get-ManifestHash -Path $manifest2
+            
+            $hash1 | Should -Not -Be $hash2
+        }
+        
+        It "CRLF and LF produce same hash" {
+            $manifestCRLF = Join-Path $script:HashTestDir "crlf.jsonc"
+            $manifestLF = Join-Path $script:HashTestDir "lf.jsonc"
+            
+            $contentCRLF = "{`"version`": 1,`r`n`"apps`": []`r`n}"
+            $contentLF = "{`"version`": 1,`n`"apps`": []`n}"
+            
+            [System.IO.File]::WriteAllText($manifestCRLF, $contentCRLF)
+            [System.IO.File]::WriteAllText($manifestLF, $contentLF)
+            
+            $hashCRLF = Get-ManifestHash -Path $manifestCRLF
+            $hashLF = Get-ManifestHash -Path $manifestLF
+            
+            $hashCRLF | Should -Be $hashLF
+        }
+        
+        It "Returns null for non-existent file" {
+            $hash = Get-ManifestHash -Path "C:\nonexistent\file.jsonc"
+            $hash | Should -BeNullOrEmpty
+        }
+        
+        It "Hash is lowercase hex string" {
+            $manifest = Join-Path $script:HashTestDir "hex.jsonc"
+            Set-Content -Path $manifest -Value '{"test": true}'
+            
+            $hash = Get-ManifestHash -Path $manifest
+            
+            $hash | Should -Match '^[a-f0-9]{64}$'
+        }
+    }
+}
+
+Describe "Autosuite Drift Detection (Bundle B)" {
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:WingetScript = $script:MockWingetPath
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+    }
+    
+    Context "Compute-Drift Function" {
+        It "Detects missing apps" {
+            $drift = Compute-Drift -ManifestPath $script:TestManifestPath
+            
+            $drift.Success | Should -Be $true
+            $drift.MissingCount | Should -BeGreaterThan 0
+            $drift.Missing | Should -Contain "Missing.App"
+        }
+        
+        It "Reports zero missing when all installed" {
+            $drift = Compute-Drift -ManifestPath $script:AllInstalledManifestPath
+            
+            $drift.Success | Should -Be $true
+            $drift.MissingCount | Should -Be 0
+        }
+        
+        It "Detects extra apps (installed but not in manifest)" {
+            # Create a minimal manifest with only one app
+            $minimalManifest = Join-Path $script:TestDir "minimal.jsonc"
+            $content = @'
+{
+  "version": 1,
+  "apps": [
+    { "id": "7zip", "refs": { "windows": "7zip.7zip" } }
+  ]
+}
+'@
+            Set-Content -Path $minimalManifest -Value $content
+            
+            $drift = Compute-Drift -ManifestPath $minimalManifest
+            
+            $drift.Success | Should -Be $true
+            # Git.Git is installed but not in manifest
+            $drift.ExtraCount | Should -BeGreaterThan 0
+        }
+        
+        It "Returns error for invalid manifest" {
+            $drift = Compute-Drift -ManifestPath "C:\nonexistent\manifest.jsonc"
+            
+            $drift.Success | Should -Be $false
+            $drift.Error | Should -Not -BeNullOrEmpty
+        }
+    }
+    
+    Context "Verify Updates State" {
+        BeforeEach {
+            $script:TestStateDir = Join-Path $script:TestDir ".autosuite-verify-test"
+            if (Test-Path $script:TestStateDir) {
+                Remove-Item $script:TestStateDir -Recurse -Force
+            }
+            $script:AutosuiteStateDir = $script:TestStateDir
+            $script:AutosuiteStatePath = Join-Path $script:TestStateDir "state.json"
+        }
+        
+        AfterEach {
+            if (Test-Path $script:TestStateDir) {
+                Remove-Item $script:TestStateDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        
+        It "Verify creates state file with lastVerify" {
+            $result = Invoke-VerifyCore -ManifestPath $script:AllInstalledManifestPath
+            
+            $script:AutosuiteStatePath | Should -Exist
+            $state = Get-Content $script:AutosuiteStatePath -Raw | ConvertFrom-Json
+            $state.lastVerify | Should -Not -BeNullOrEmpty
+            $state.lastVerify.manifestPath | Should -Be $script:AllInstalledManifestPath
+            $state.lastVerify.success | Should -Be $true
+        }
+        
+        It "Verify records okCount and missingCount" {
+            Invoke-VerifyCore -ManifestPath $script:TestManifestPath | Out-Null
+            
+            $state = Get-Content $script:AutosuiteStatePath -Raw | ConvertFrom-Json
+            $state.lastVerify.okCount | Should -Be 2
+            $state.lastVerify.missingCount | Should -Be 1
+        }
+        
+        It "Verify emits drift summary line" {
+            $output = Invoke-VerifyCore -ManifestPath $script:TestManifestPath 4>&1
+            
+            $driftLine = $output | Where-Object { $_ -match '\[autosuite\] Drift:' }
+            $driftLine | Should -Not -BeNullOrEmpty
+            $driftLine | Should -Match 'Missing=1'
+        }
+    }
+}
+
+Describe "Autosuite State Reset (Bundle B)" {
+    
+    BeforeEach {
+        $script:TestStateDir = Join-Path $script:TestDir ".autosuite-reset-test"
+        if (Test-Path $script:TestStateDir) {
+            Remove-Item $script:TestStateDir -Recurse -Force
+        }
+        
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:AutosuiteStateDir = $script:TestStateDir
+        $script:AutosuiteStatePath = Join-Path $script:TestStateDir "state.json"
+    }
+    
+    AfterEach {
+        if (Test-Path $script:TestStateDir) {
+            Remove-Item $script:TestStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "State Reset Command" {
+        It "Reset succeeds when no state file exists" {
+            $result = Invoke-StateResetCore
+            
+            $result.Success | Should -Be $true
+            $result.WasReset | Should -Be $false
+        }
+        
+        It "Reset deletes existing state file" {
+            # Create state file first
+            New-Item -ItemType Directory -Path $script:TestStateDir -Force | Out-Null
+            Set-Content -Path $script:AutosuiteStatePath -Value '{"schemaVersion": 1}'
+            
+            $result = Invoke-StateResetCore
+            
+            $result.Success | Should -Be $true
+            $result.WasReset | Should -Be $true
+            $script:AutosuiteStatePath | Should -Not -Exist
+        }
+        
+        It "Reset emits stable wrapper lines" {
+            New-Item -ItemType Directory -Path $script:TestStateDir -Force | Out-Null
+            Set-Content -Path $script:AutosuiteStatePath -Value '{"schemaVersion": 1}'
+            
+            $output = Invoke-StateResetCore 4>&1
+            
+            $output | Should -Contain "[autosuite] State: resetting..."
+            $output | Should -Contain "[autosuite] State: reset completed"
         }
     }
 }

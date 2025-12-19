@@ -86,11 +86,35 @@ automation-suite/
 ### Other Commands
 
 ```powershell
-# Show most recent provisioning run
-.\autosuite.ps1 report -Latest
+# Show state summary (last applied, last verify)
+.\autosuite.ps1 report
 
-# Diagnose environment issues
+# Show state summary with current drift against manifest
+.\autosuite.ps1 report -Manifest manifest.jsonc
+
+# Diagnose environment issues (includes drift detection if manifest provided)
 .\autosuite.ps1 doctor
+.\autosuite.ps1 doctor -Manifest manifest.jsonc
+
+# Reset autosuite state (deletes .autosuite/state.json)
+.\autosuite.ps1 state reset
+```
+
+### State & Drift Detection
+
+Autosuite tracks state in `.autosuite/state.json` (repo-local, gitignored):
+
+- **lastApplied**: Manifest path, hash, and timestamp of last `apply`
+- **lastVerify**: Manifest path, hash, timestamp, and results of last `verify`
+- **appsObserved**: Map of winget IDs to installed status and version
+
+Drift detection compares current installed apps against a manifest:
+- **Missing**: Apps required by manifest but not installed
+- **Extra**: Apps installed but not in manifest
+
+The `verify` command emits a drift summary line:
+```
+[autosuite] Drift: Missing=<n> Extra=<n> VersionMismatches=<n>
 ```
 
 ### Manifest Locations
@@ -99,6 +123,7 @@ automation-suite/
 |------|---------|
 | `provisioning/manifests/fixture-test.jsonc` | Committed test fixture (deterministic) |
 | `provisioning/manifests/local/` | Machine-specific captures (gitignored) |
+| `.autosuite/state.json` | State file for drift detection (gitignored) |
 
 ---
 
