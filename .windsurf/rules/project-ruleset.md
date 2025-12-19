@@ -272,14 +272,19 @@ cd provisioning
 | `-Last <n>` | - | Show N most recent runs in compact list format |
 | `-Json` | false | Output as machine-readable JSON (no color formatting) |
 
-### Running Tests
+### Vendored Pester Policy
 
-The test runner bootstraps Pester 5.5.0+ automatically via `scripts/ensure-pester.ps1`.
-Tests are written for Pester 5.x and use features like `BeforeAll`, `AfterAll`, and `Should -Be`.
+This repo values hermetic, deterministic, offline-capable tooling:
+
+- **Pester 5.7.1 is vendored** in `tools/pester/` and committed to the repository
+- Tests always use vendored Pester first, never global modules
+- `scripts/ensure-pester.ps1` prepends `tools/pester/` to `$env:PSModulePath`
+- If vendored Pester is missing, it bootstraps via: `Save-Module Pester -Path tools/pester -RequiredVersion 5.7.1`
+
+### Running Tests
 
 ```powershell
 # From repo root - run all Pester tests (recommended)
-# Bootstraps Pester 5.5.0+ and runs all tests with proper exit codes
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1
 
 # Run autosuite tests only
@@ -292,6 +297,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path prov
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path tests\unit\Autosuite.Tests.ps1
 ```
 
+**Exit codes**: The test runner exits 0 on success, non-zero on failure.
+
 ### Test Environment Variables
 
 | Variable | Description |
@@ -302,10 +309,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path test
 
 | File | Purpose |
 |------|---------|
-| `scripts/ensure-pester.ps1` | Bootstraps Pester 5.5.0+ (prefers `tools/pester/` vendor, falls back to CurrentUser install) |
-| `scripts/test_pester.ps1` | Main test runner - calls ensure-pester, runs Invoke-Pester, exits non-zero on failures |
-| `tools/pester/` | Vendored Pester module (gitignored, auto-created by ensure-pester.ps1) |
-```
+| `scripts/ensure-pester.ps1` | Ensures vendored Pester is available, prepends to PSModulePath |
+| `scripts/test_pester.ps1` | Main test runner - calls ensure-pester, runs Invoke-Pester -CI, exits non-zero on failures |
+| `tools/pester/` | **Vendored Pester 5.7.1 (committed)** - authoritative source for deterministic test execution |
+| `test-results.xml` | NUnit XML test results (gitignored) |
 
 ### Other Scripts
 

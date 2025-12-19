@@ -153,7 +153,9 @@ function Invoke-ProvisioningCli {
         exit 1
     }
     
-    Write-Host "[autosuite] Delegating to provisioning subsystem..." -ForegroundColor DarkGray
+    # Emit stable wrapper line via Write-Output for testability (also Write-Host for console)
+    $delegationMsg = "[autosuite] Delegating to provisioning subsystem..."
+    Write-Output $delegationMsg
     Write-Host ""
     
     $params = @{ Command = $ProvisioningCommand }

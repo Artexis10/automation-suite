@@ -105,33 +105,35 @@ Describe "Autosuite Root Orchestrator" {
     
     Context "Delegation Message" {
         BeforeEach {
+            $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
             if (Test-Path $script:CapturedArgsPath) {
                 Remove-Item $script:CapturedArgsPath -Force
             }
         }
         
-        It "Prints delegation message for apply" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_PROVISIONING_CLI='$($script:MockCliPath)'; & '$($script:AutosuitePath)' apply -Manifest 'c:\test.jsonc'" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "\[autosuite\] Delegating to provisioning subsystem"
+        AfterEach {
+            $env:AUTOSUITE_PROVISIONING_CLI = $null
         }
         
-        It "Prints delegation message for capture" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_PROVISIONING_CLI='$($script:MockCliPath)'; & '$($script:AutosuitePath)' capture -Profile 'test'" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "\[autosuite\] Delegating to provisioning subsystem"
+        It "Emits stable delegation message for apply" {
+            # Write-Output is captured directly without subprocess
+            $output = & $script:AutosuitePath apply -Manifest "c:\test.jsonc" 2>&1
+            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
         }
         
-        It "Prints delegation message for report" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_PROVISIONING_CLI='$($script:MockCliPath)'; & '$($script:AutosuitePath)' report" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "\[autosuite\] Delegating to provisioning subsystem"
+        It "Emits stable delegation message for capture" {
+            $output = & $script:AutosuitePath capture -Profile "test" 2>&1
+            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
         }
         
-        It "Prints delegation message for doctor" {
-            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_PROVISIONING_CLI='$($script:MockCliPath)'; & '$($script:AutosuitePath)' doctor" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "\[autosuite\] Delegating to provisioning subsystem"
+        It "Emits stable delegation message for report" {
+            $output = & $script:AutosuitePath report 2>&1
+            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
+        }
+        
+        It "Emits stable delegation message for doctor" {
+            $output = & $script:AutosuitePath doctor 2>&1
+            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
         }
     }
 }

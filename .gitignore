@@ -46,8 +46,11 @@ temp/
 *.tmp
 *~
 
-# Vendored tools (auto-installed by scripts)
-tools/pester/
+# Vendored tools
+# NOTE: tools/pester/ is NOT ignored - it is committed for deterministic, offline-capable test execution
+
+# Test results
+test-results.xml
 
 # Output files (keep structure, not content)
 outputs/*.pdf
