@@ -1516,3 +1516,419 @@ Describe "Bundle D: Capture Output Markers" {
 }
 
 #endregion Bundle D Tests
+
+#region Report -Json Tests
+
+Describe "Report -Json Output" {
+    
+    BeforeAll {
+        $script:ReportTestDir = Join-Path $script:TestDir "report-json-test"
+        New-Item -ItemType Directory -Path $script:ReportTestDir -Force | Out-Null
+    }
+    
+    AfterAll {
+        if ($script:ReportTestDir -and (Test-Path $script:ReportTestDir)) {
+            Remove-Item -Path $script:ReportTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    BeforeEach {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:AutosuiteStateDir = Join-Path $script:ReportTestDir ".autosuite-report-test"
+        $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+        
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force
+        }
+    }
+    
+    AfterEach {
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "JSON Output Purity (in-process)" {
+        It "Returns valid JSON with schemaVersion and timestampUtc" {
+            # Create some state first
+            $state = New-AutosuiteState
+            $state.lastApplied = @{
+                manifestPath = "test.jsonc"
+                manifestHash = "abc123"
+                timestampUtc = "2025-01-01T00:00:00Z"
+            }
+            Write-AutosuiteStateAtomic -State $state | Out-Null
+            
+            $result = Invoke-ReportCore -OutputJson $true
+            
+            $result.Success | Should -Be $true
+            $result.JsonOutput | Should -Not -BeNullOrEmpty
+            
+            # Parse JSON to verify structure
+            $parsed = $result.JsonOutput | ConvertFrom-Json
+            $parsed.schemaVersion | Should -Be 1
+            $parsed.timestampUtc | Should -Not -BeNullOrEmpty
+        }
+        
+        It "Returns valid JSON even when no state exists" {
+            $result = Invoke-ReportCore -OutputJson $true
+            
+            $result.Success | Should -Be $true
+            $result.JsonOutput | Should -Not -BeNullOrEmpty
+            
+            $parsed = $result.JsonOutput | ConvertFrom-Json
+            $parsed.schemaVersion | Should -Be 1
+            $parsed.state | Should -BeNullOrEmpty
+        }
+    }
+    
+    Context "JSON Output to File (in-process)" {
+        It "Writes JSON to file atomically" {
+            $outPath = Join-Path $script:ReportTestDir "report-output.json"
+            
+            $result = Invoke-ReportCore -OutputJson $true -OutPath $outPath
+            
+            $result.Success | Should -Be $true
+            $outPath | Should -Exist
+            
+            $fileContent = Get-Content $outPath -Raw
+            { $fileContent | ConvertFrom-Json } | Should -Not -Throw
+        }
+        
+        It "JSON file matches stdout output" {
+            # Create state
+            $state = New-AutosuiteState
+            $state.lastVerify = @{
+                manifestPath = "verify.jsonc"
+                timestampUtc = "2025-01-02T00:00:00Z"
+                success = $true
+                okCount = 5
+                missingCount = 0
+            }
+            Write-AutosuiteStateAtomic -State $state | Out-Null
+            
+            $outPath = Join-Path $script:ReportTestDir "report-match.json"
+            $result = Invoke-ReportCore -OutputJson $true -OutPath $outPath
+            
+            $fileContent = Get-Content $outPath -Raw
+            # Normalize whitespace for comparison
+            $fileNormalized = ($fileContent | ConvertFrom-Json | ConvertTo-Json -Depth 10)
+            $stdoutNormalized = ($result.JsonOutput | ConvertFrom-Json | ConvertTo-Json -Depth 10)
+            
+            $fileNormalized | Should -Be $stdoutNormalized
+        }
+    }
+    
+    Context "JSON Output Purity (subprocess)" {
+        It "Stdout contains only valid JSON when -Json is set" {
+            # Run in subprocess to verify stdout purity
+            $output = pwsh -NoProfile -Command "& '$($script:AutosuitePath)' report -Json" 2>&1
+            $stdoutOnly = $output | Where-Object { $_ -is [string] -or $_.GetType().Name -eq 'String' }
+            $stdoutStr = $stdoutOnly -join "`n"
+            
+            # Remove any banner/version lines that might appear before JSON
+            # The JSON should be parseable
+            { $stdoutStr | ConvertFrom-Json } | Should -Not -Throw
+        }
+    }
+}
+
+#endregion Report -Json Tests
+
+#region State Export/Import Tests
+
+Describe "State Export" {
+    
+    BeforeAll {
+        $script:ExportTestDir = Join-Path $script:TestDir "state-export-test"
+        New-Item -ItemType Directory -Path $script:ExportTestDir -Force | Out-Null
+    }
+    
+    AfterAll {
+        if ($script:ExportTestDir -and (Test-Path $script:ExportTestDir)) {
+            Remove-Item -Path $script:ExportTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    BeforeEach {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:AutosuiteStateDir = Join-Path $script:ExportTestDir ".autosuite-export-test"
+        $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+        
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force
+        }
+    }
+    
+    AfterEach {
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Export with Existing State" {
+        It "Exports state to specified path" {
+            # Create state
+            $state = New-AutosuiteState
+            $state.lastApplied = @{
+                manifestPath = "export-test.jsonc"
+                manifestHash = "def456"
+                timestampUtc = "2025-01-03T00:00:00Z"
+            }
+            Write-AutosuiteStateAtomic -State $state | Out-Null
+            
+            $exportPath = Join-Path $script:ExportTestDir "exported-state.json"
+            $result = Invoke-StateExportCore -OutPath $exportPath
+            
+            $result.Success | Should -Be $true
+            $exportPath | Should -Exist
+            
+            $exported = Get-Content $exportPath -Raw | ConvertFrom-Json
+            $exported.schemaVersion | Should -Be 1
+            $exported.lastApplied.manifestPath | Should -Be "export-test.jsonc"
+        }
+    }
+    
+    Context "Export with No State" {
+        It "Exports valid empty schema when no state exists" {
+            $exportPath = Join-Path $script:ExportTestDir "empty-state.json"
+            $result = Invoke-StateExportCore -OutPath $exportPath
+            
+            $result.Success | Should -Be $true
+            $exportPath | Should -Exist
+            
+            $exported = Get-Content $exportPath -Raw | ConvertFrom-Json
+            $exported.schemaVersion | Should -Be 1
+            $exported.lastApplied | Should -BeNullOrEmpty
+            $exported.lastVerify | Should -BeNullOrEmpty
+        }
+    }
+    
+    Context "Export Atomic Write" {
+        It "No temp files remain after export" {
+            $exportPath = Join-Path $script:ExportTestDir "atomic-test.json"
+            Invoke-StateExportCore -OutPath $exportPath | Out-Null
+            
+            $tempFiles = Get-ChildItem -Path $script:ExportTestDir -Filter "*.tmp.*" -ErrorAction SilentlyContinue
+            $tempFiles.Count | Should -Be 0
+        }
+    }
+}
+
+Describe "State Import" {
+    
+    BeforeAll {
+        $script:ImportTestDir = Join-Path $script:TestDir "state-import-test"
+        New-Item -ItemType Directory -Path $script:ImportTestDir -Force | Out-Null
+    }
+    
+    AfterAll {
+        if ($script:ImportTestDir -and (Test-Path $script:ImportTestDir)) {
+            Remove-Item -Path $script:ImportTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    BeforeEach {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:AutosuiteStateDir = Join-Path $script:ImportTestDir ".autosuite-import-test"
+        $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+        
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force
+        }
+    }
+    
+    AfterEach {
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Import Validation" {
+        It "Rejects file with missing schemaVersion" {
+            $invalidPath = Join-Path $script:ImportTestDir "invalid-no-schema.json"
+            Set-Content -Path $invalidPath -Value '{"lastApplied": null}'
+            
+            $result = Invoke-StateImportCore -InPath $invalidPath
+            
+            $result.Success | Should -Be $false
+            $result.Error | Should -Match "schemaVersion"
+        }
+        
+        It "Rejects file with unsupported schemaVersion" {
+            $invalidPath = Join-Path $script:ImportTestDir "invalid-schema-v99.json"
+            Set-Content -Path $invalidPath -Value '{"schemaVersion": 99}'
+            
+            $result = Invoke-StateImportCore -InPath $invalidPath
+            
+            $result.Success | Should -Be $false
+            $result.Error | Should -Match "Unsupported"
+        }
+        
+        It "Rejects non-existent file" {
+            $result = Invoke-StateImportCore -InPath "C:\nonexistent\file.json"
+            
+            $result.Success | Should -Be $false
+            $result.Error | Should -Match "not found"
+        }
+        
+        It "Rejects invalid JSON" {
+            $invalidPath = Join-Path $script:ImportTestDir "invalid-json.json"
+            Set-Content -Path $invalidPath -Value 'not valid json {'
+            
+            $result = Invoke-StateImportCore -InPath $invalidPath
+            
+            $result.Success | Should -Be $false
+            $result.Error | Should -Match "Invalid JSON"
+        }
+    }
+    
+    Context "Import Merge Behavior" {
+        It "Merges incoming state into empty state" {
+            $importPath = Join-Path $script:ImportTestDir "merge-source.json"
+            $importState = @{
+                schemaVersion = 1
+                lastApplied = @{
+                    manifestPath = "imported.jsonc"
+                    manifestHash = "import123"
+                    timestampUtc = "2025-01-05T00:00:00Z"
+                }
+            }
+            $importState | ConvertTo-Json -Depth 10 | Set-Content -Path $importPath
+            
+            $result = Invoke-StateImportCore -InPath $importPath -ReplaceMode $false
+            
+            $result.Success | Should -Be $true
+            $result.Mode | Should -Be "merge"
+            
+            $state = Read-AutosuiteState
+            $state.lastApplied.manifestPath | Should -Be "imported.jsonc"
+        }
+        
+        It "Incoming overwrites existing when timestamp is newer" {
+            # Create existing state with older timestamp
+            $existingState = New-AutosuiteState
+            $existingState.lastApplied = @{
+                manifestPath = "old.jsonc"
+                manifestHash = "old123"
+                timestampUtc = "2025-01-01T00:00:00Z"
+            }
+            Write-AutosuiteStateAtomic -State $existingState | Out-Null
+            
+            # Import with newer timestamp
+            $importPath = Join-Path $script:ImportTestDir "newer-state.json"
+            $importState = @{
+                schemaVersion = 1
+                lastApplied = @{
+                    manifestPath = "new.jsonc"
+                    manifestHash = "new123"
+                    timestampUtc = "2025-01-10T00:00:00Z"
+                }
+            }
+            $importState | ConvertTo-Json -Depth 10 | Set-Content -Path $importPath
+            
+            $result = Invoke-StateImportCore -InPath $importPath -ReplaceMode $false
+            
+            $result.Success | Should -Be $true
+            
+            $state = Read-AutosuiteState
+            $state.lastApplied.manifestPath | Should -Be "new.jsonc"
+        }
+        
+        It "Existing preserved when timestamp is newer than incoming" {
+            # Create existing state with newer timestamp
+            $existingState = New-AutosuiteState
+            $existingState.lastApplied = @{
+                manifestPath = "existing.jsonc"
+                manifestHash = "existing123"
+                timestampUtc = "2025-01-20T00:00:00Z"
+            }
+            Write-AutosuiteStateAtomic -State $existingState | Out-Null
+            
+            # Import with older timestamp
+            $importPath = Join-Path $script:ImportTestDir "older-state.json"
+            $importState = @{
+                schemaVersion = 1
+                lastApplied = @{
+                    manifestPath = "older.jsonc"
+                    manifestHash = "older123"
+                    timestampUtc = "2025-01-05T00:00:00Z"
+                }
+            }
+            $importState | ConvertTo-Json -Depth 10 | Set-Content -Path $importPath
+            
+            $result = Invoke-StateImportCore -InPath $importPath -ReplaceMode $false
+            
+            $result.Success | Should -Be $true
+            
+            $state = Read-AutosuiteState
+            $state.lastApplied.manifestPath | Should -Be "existing.jsonc"
+        }
+    }
+    
+    Context "Import Replace Behavior" {
+        It "Replaces existing state entirely" {
+            # Create existing state
+            $existingState = New-AutosuiteState
+            $existingState.lastApplied = @{
+                manifestPath = "will-be-replaced.jsonc"
+                manifestHash = "replace123"
+                timestampUtc = "2025-01-15T00:00:00Z"
+            }
+            $existingState.lastVerify = @{
+                manifestPath = "verify.jsonc"
+                timestampUtc = "2025-01-15T00:00:00Z"
+                success = $true
+            }
+            Write-AutosuiteStateAtomic -State $existingState | Out-Null
+            
+            # Import with replace mode (no lastVerify)
+            $importPath = Join-Path $script:ImportTestDir "replace-source.json"
+            $importState = @{
+                schemaVersion = 1
+                lastApplied = @{
+                    manifestPath = "replacement.jsonc"
+                    manifestHash = "replacement123"
+                    timestampUtc = "2025-01-01T00:00:00Z"
+                }
+            }
+            $importState | ConvertTo-Json -Depth 10 | Set-Content -Path $importPath
+            
+            $result = Invoke-StateImportCore -InPath $importPath -ReplaceMode $true
+            
+            $result.Success | Should -Be $true
+            $result.Mode | Should -Be "replace"
+            
+            $state = Read-AutosuiteState
+            $state.lastApplied.manifestPath | Should -Be "replacement.jsonc"
+            $state.lastVerify | Should -BeNullOrEmpty
+        }
+        
+        It "Creates backup before replace" {
+            # Create existing state
+            $existingState = New-AutosuiteState
+            $existingState.lastApplied = @{
+                manifestPath = "backup-test.jsonc"
+                timestampUtc = "2025-01-10T00:00:00Z"
+            }
+            Write-AutosuiteStateAtomic -State $existingState | Out-Null
+            
+            # Import with replace
+            $importPath = Join-Path $script:ImportTestDir "replace-backup.json"
+            $importState = @{ schemaVersion = 1 }
+            $importState | ConvertTo-Json | Set-Content -Path $importPath
+            
+            $result = Invoke-StateImportCore -InPath $importPath -ReplaceMode $true
+            
+            $result.Success | Should -Be $true
+            
+            # Check backup exists
+            $backupDir = Join-Path $script:AutosuiteStateDir "backup"
+            $backupDir | Should -Exist
+            $backups = Get-ChildItem -Path $backupDir -Filter "state.*.json"
+            $backups.Count | Should -BeGreaterThan 0
+        }
+    }
+}
+
+#endregion State Export/Import Tests

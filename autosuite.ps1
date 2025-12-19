@@ -108,9 +108,21 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$Json,
 
-    # State subcommand (e.g., "reset")
+    # State subcommand (e.g., "reset", "export", "import")
     [Parameter(Position = 1, Mandatory = $false)]
-    [string]$SubCommand
+    [string]$SubCommand,
+
+    # State import: input file path
+    [Parameter(Mandatory = $false)]
+    [string]$In,
+
+    # State import: merge mode (default)
+    [Parameter(Mandatory = $false)]
+    [switch]$Merge,
+
+    # State import: replace mode
+    [Parameter(Mandatory = $false)]
+    [switch]$Replace
 )
 
 $ErrorActionPreference = "Stop"
@@ -407,10 +419,15 @@ function Show-Help {
     Write-Host ""
     Write-Host "REPORT OPTIONS:" -ForegroundColor Yellow
     Write-Host "    -Manifest <path>   Include current drift against manifest"
-    Write-Host "    -Json              Output as JSON"
+    Write-Host "    -Json              Output as JSON (pure JSON to stdout, no wrapper text)"
+    Write-Host "    -Out <path>        Write JSON to file (atomic write)"
     Write-Host ""
     Write-Host "STATE SUBCOMMANDS:" -ForegroundColor Yellow
     Write-Host "    reset              Delete .autosuite/state.json (non-destructive)"
+    Write-Host "    export -Out <p>    Export state to file (atomic, valid schema even if empty)"
+    Write-Host "    import -In <p>     Import state from file (default: merge)"
+    Write-Host "      [-Merge]         Merge incoming (newer timestamps win)"
+    Write-Host "      [-Replace]       Replace entirely (backup existing first)"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
     Write-Host "    .\autosuite.ps1 capture                                    # Capture to local/<machine>.jsonc"
@@ -1626,41 +1643,82 @@ function Invoke-PlanCore {
 function Invoke-ReportCore {
     <#
     .SYNOPSIS
-        Core report logic. Returns structured result only - no stream output.
+        Core report logic. Returns structured result only.
+    .DESCRIPTION
+        When -OutputJson is true, outputs JSON to stdout (stream 1) only.
+        All wrapper/status lines go to Information stream (6).
+        When -OutPath is provided, writes JSON atomically to file.
     #>
     param(
         [string]$ManifestPath,
-        [bool]$OutputJson
+        [bool]$OutputJson,
+        [string]$OutPath
     )
     
     $state = Read-AutosuiteState
-    
-    if (-not $state) {
-        Write-Host "No autosuite state found. Run 'apply' or 'verify' to create state." -ForegroundColor Yellow
-        return @{ Success = $true; ExitCode = 0; HasState = $false }
-    }
+    $timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
     
     if ($OutputJson) {
-        # JSON output mode
-        $output = @{
-            schemaVersion = $state.schemaVersion
-            lastApplied = $state.lastApplied
-            lastVerify = $state.lastVerify
+        # JSON output mode - build report object
+        $report = [ordered]@{
+            schemaVersion = if ($state) { $state.schemaVersion } else { 1 }
+            timestampUtc = $timestampUtc
+        }
+        
+        if ($state) {
+            $report.state = [ordered]@{
+                lastApplied = $state.lastApplied
+                lastVerify = $state.lastVerify
+                appsObserved = $state.appsObserved
+            }
+        } else {
+            $report.state = $null
         }
         
         if ($ManifestPath) {
+            $manifestHash = Get-ManifestHash -Path $ManifestPath
             $drift = Compute-Drift -ManifestPath $ManifestPath
-            $output.drift = @{
-                manifestPath = $ManifestPath
+            $report.manifest = [ordered]@{
+                path = $ManifestPath
+                hash = $manifestHash
+            }
+            $report.drift = [ordered]@{
                 missing = $drift.Missing
                 extra = $drift.Extra
                 missingCount = $drift.MissingCount
                 extraCount = $drift.ExtraCount
+                versionMismatches = $drift.VersionMismatches
             }
         }
         
-        $output | ConvertTo-Json -Depth 10
-        return @{ Success = $true; ExitCode = 0; HasState = $true }
+        $jsonOutput = $report | ConvertTo-Json -Depth 10
+        
+        # Write to file if -Out specified (atomic write)
+        if ($OutPath) {
+            $outDir = Split-Path -Parent $OutPath
+            if ($outDir -and -not (Test-Path $outDir)) {
+                New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+            }
+            $tempPath = "$OutPath.tmp.$([guid]::NewGuid().ToString('N').Substring(0,8))"
+            try {
+                Set-Content -Path $tempPath -Value $jsonOutput -Encoding UTF8 -ErrorAction Stop
+                Move-Item -Path $tempPath -Destination $OutPath -Force -ErrorAction Stop
+            } catch {
+                if (Test-Path $tempPath) { Remove-Item $tempPath -Force -ErrorAction SilentlyContinue }
+                throw
+            }
+        }
+        
+        # Output JSON to stdout (stream 1) - this is the ONLY output to stdout
+        Write-Output $jsonOutput
+        
+        return @{ Success = $true; ExitCode = 0; HasState = ($null -ne $state); JsonOutput = $jsonOutput }
+    }
+    
+    # Human-readable mode - check for state first
+    if (-not $state) {
+        Write-Host "No autosuite state found. Run 'apply' or 'verify' to create state." -ForegroundColor Yellow
+        return @{ Success = $true; ExitCode = 0; HasState = $false }
     }
     
     # Human-readable output
@@ -1816,6 +1874,218 @@ function Invoke-StateResetCore {
     }
 }
 
+function Invoke-StateExportCore {
+    <#
+    .SYNOPSIS
+        Export state to a file. If no state exists, exports valid empty schema.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutPath
+    )
+    
+    # Security: Validate output path is not outside reasonable bounds
+    # (Allow any path for export - user controls destination)
+    
+    $state = Read-AutosuiteState
+    
+    if (-not $state) {
+        # No state exists - export empty schema
+        $state = New-AutosuiteState
+        Write-Host "No existing state - exporting empty schema" -ForegroundColor Yellow
+    }
+    
+    # Convert PSCustomObject to hashtable if needed
+    if ($state -is [PSCustomObject]) {
+        $stateHash = @{}
+        $state.PSObject.Properties | ForEach-Object { $stateHash[$_.Name] = $_.Value }
+        $state = $stateHash
+    }
+    
+    # Ensure schemaVersion is present
+    if (-not $state.schemaVersion) {
+        $state.schemaVersion = 1
+    }
+    
+    # Atomic write
+    $outDir = Split-Path -Parent $OutPath
+    if ($outDir -and -not (Test-Path $outDir)) {
+        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+    }
+    
+    $tempPath = "$OutPath.tmp.$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    try {
+        $jsonContent = $state | ConvertTo-Json -Depth 10
+        Set-Content -Path $tempPath -Value $jsonContent -Encoding UTF8 -ErrorAction Stop
+        Move-Item -Path $tempPath -Destination $OutPath -Force -ErrorAction Stop
+        Write-Host "State exported to: $OutPath" -ForegroundColor Green
+        return @{ Success = $true; ExitCode = 0; OutputPath = $OutPath }
+    } catch {
+        if (Test-Path $tempPath) { Remove-Item $tempPath -Force -ErrorAction SilentlyContinue }
+        Write-Host "[ERROR] Failed to export state: $_" -ForegroundColor Red
+        return @{ Success = $false; ExitCode = 1; Error = $_.ToString() }
+    }
+}
+
+function Invoke-StateImportCore {
+    <#
+    .SYNOPSIS
+        Import state from a file with merge or replace behavior.
+    .DESCRIPTION
+        - Validates JSON and schemaVersion
+        - Merge (default): incoming overwrites only if timestamp is newer
+        - Replace: backup existing, then replace entirely
+        - Security: Only writes under .autosuite/, never outside repo root
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InPath,
+        
+        [Parameter(Mandatory = $false)]
+        [bool]$ReplaceMode = $false
+    )
+    
+    # Validate input file exists
+    if (-not (Test-Path $InPath)) {
+        Write-Host "[ERROR] Import file not found: $InPath" -ForegroundColor Red
+        return @{ Success = $false; ExitCode = 1; Error = "File not found" }
+    }
+    
+    # Read and validate incoming state
+    try {
+        $incomingContent = Get-Content -Path $InPath -Raw -ErrorAction Stop
+        $incoming = $incomingContent | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Host "[ERROR] Failed to parse import file as JSON: $_" -ForegroundColor Red
+        return @{ Success = $false; ExitCode = 1; Error = "Invalid JSON" }
+    }
+    
+    # Validate schemaVersion
+    if (-not $incoming.schemaVersion) {
+        Write-Host "[ERROR] Import file missing schemaVersion" -ForegroundColor Red
+        return @{ Success = $false; ExitCode = 1; Error = "Missing schemaVersion" }
+    }
+    
+    if ($incoming.schemaVersion -ne 1) {
+        Write-Host "[ERROR] Unsupported schemaVersion: $($incoming.schemaVersion) (expected 1)" -ForegroundColor Red
+        return @{ Success = $false; ExitCode = 1; Error = "Unsupported schemaVersion" }
+    }
+    
+    # Convert incoming PSCustomObject to hashtable
+    $incomingHash = @{}
+    $incoming.PSObject.Properties | ForEach-Object { $incomingHash[$_.Name] = $_.Value }
+    
+    $stateDir = Get-AutosuiteStateDir
+    $statePath = Get-AutosuiteStatePath
+    
+    # Ensure state directory exists
+    if (-not (Test-Path $stateDir)) {
+        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+    }
+    
+    if ($ReplaceMode) {
+        # Replace mode: backup existing state first
+        if (Test-Path $statePath) {
+            $backupDir = Join-Path $stateDir "backup"
+            if (-not (Test-Path $backupDir)) {
+                New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+            }
+            $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
+            $backupPath = Join-Path $backupDir "state.$timestamp.json"
+            try {
+                Copy-Item -Path $statePath -Destination $backupPath -Force -ErrorAction Stop
+                Write-Host "Existing state backed up to: $backupPath" -ForegroundColor Cyan
+            } catch {
+                Write-Host "[ERROR] Failed to backup existing state: $_" -ForegroundColor Red
+                return @{ Success = $false; ExitCode = 1; Error = "Backup failed" }
+            }
+        }
+        
+        # Write incoming state directly
+        $result = Write-AutosuiteStateAtomic -State $incomingHash
+        if ($result) {
+            Write-Host "State replaced from: $InPath" -ForegroundColor Green
+            return @{ Success = $true; ExitCode = 0; Mode = "replace" }
+        } else {
+            return @{ Success = $false; ExitCode = 1; Error = "Write failed" }
+        }
+    } else {
+        # Merge mode (default): merge incoming into existing
+        $existing = Read-AutosuiteState
+        if (-not $existing) {
+            $existing = New-AutosuiteState
+        }
+        
+        # Convert existing PSCustomObject to hashtable if needed
+        if ($existing -is [PSCustomObject]) {
+            $existingHash = @{}
+            $existing.PSObject.Properties | ForEach-Object { $existingHash[$_.Name] = $_.Value }
+            $existing = $existingHash
+        }
+        
+        # Merge logic: incoming overwrites only if timestamp is newer
+        # lastApplied
+        if ($incomingHash.lastApplied) {
+            $incomingAppliedTime = $null
+            $existingAppliedTime = $null
+            
+            if ($incomingHash.lastApplied.timestampUtc) {
+                try { $incomingAppliedTime = [DateTime]::Parse($incomingHash.lastApplied.timestampUtc) } catch {}
+            }
+            if ($existing.lastApplied -and $existing.lastApplied.timestampUtc) {
+                try { $existingAppliedTime = [DateTime]::Parse($existing.lastApplied.timestampUtc) } catch {}
+            }
+            
+            if ($null -eq $existingAppliedTime -or ($null -ne $incomingAppliedTime -and $incomingAppliedTime -gt $existingAppliedTime)) {
+                $existing.lastApplied = $incomingHash.lastApplied
+            }
+        }
+        
+        # lastVerify
+        if ($incomingHash.lastVerify) {
+            $incomingVerifyTime = $null
+            $existingVerifyTime = $null
+            
+            if ($incomingHash.lastVerify.timestampUtc) {
+                try { $incomingVerifyTime = [DateTime]::Parse($incomingHash.lastVerify.timestampUtc) } catch {}
+            }
+            if ($existing.lastVerify -and $existing.lastVerify.timestampUtc) {
+                try { $existingVerifyTime = [DateTime]::Parse($existing.lastVerify.timestampUtc) } catch {}
+            }
+            
+            if ($null -eq $existingVerifyTime -or ($null -ne $incomingVerifyTime -and $incomingVerifyTime -gt $existingVerifyTime)) {
+                $existing.lastVerify = $incomingHash.lastVerify
+            }
+        }
+        
+        # appsObserved: merge by key, incoming wins on conflict
+        if ($incomingHash.appsObserved) {
+            if (-not $existing.appsObserved -or $existing.appsObserved -is [PSCustomObject]) {
+                $existing.appsObserved = @{}
+            }
+            
+            $incomingApps = $incomingHash.appsObserved
+            if ($incomingApps -is [PSCustomObject]) {
+                $incomingApps.PSObject.Properties | ForEach-Object {
+                    $existing.appsObserved[$_.Name] = $_.Value
+                }
+            } elseif ($incomingApps -is [hashtable]) {
+                foreach ($key in $incomingApps.Keys) {
+                    $existing.appsObserved[$key] = $incomingApps[$key]
+                }
+            }
+        }
+        
+        $result = Write-AutosuiteStateAtomic -State $existing
+        if ($result) {
+            Write-Host "State merged from: $InPath" -ForegroundColor Green
+            return @{ Success = $true; ExitCode = 0; Mode = "merge" }
+        } else {
+            return @{ Success = $false; ExitCode = 1; Error = "Write failed" }
+        }
+    }
+}
+
 # Helper to resolve manifest path with validation
 function Resolve-ManifestPathWithValidation {
     param(
@@ -1845,7 +2115,12 @@ if ($Version.IsPresent) {
     exit 0
 }
 
-Show-Banner
+# Suppress banner for JSON output mode (report -Json needs pure JSON to stdout)
+$suppressBanner = ($Command -eq "report" -and $Json.IsPresent)
+
+if (-not $suppressBanner) {
+    Show-Banner
+}
 
 if (-not $Command) {
     Show-Help
@@ -1906,12 +2181,17 @@ switch ($Command) {
         $exitCode = $result.ExitCode
     }
     "report" {
-        Write-Information "[autosuite] Report: reading state..." -InformationAction Continue
-        $result = Invoke-ReportCore -ManifestPath $Manifest -OutputJson $Json.IsPresent
-        if ($result.HasState) {
-            Write-Information "[autosuite] Report: completed" -InformationAction Continue
-        } else {
-            Write-Information "[autosuite] Report: no state found" -InformationAction Continue
+        # For JSON mode, emit wrapper lines only to Information stream (not stdout)
+        if (-not $Json.IsPresent) {
+            Write-Information "[autosuite] Report: reading state..." -InformationAction Continue
+        }
+        $result = Invoke-ReportCore -ManifestPath $Manifest -OutputJson $Json.IsPresent -OutPath $Out
+        if (-not $Json.IsPresent) {
+            if ($result.HasState) {
+                Write-Information "[autosuite] Report: completed" -InformationAction Continue
+            } else {
+                Write-Information "[autosuite] Report: no state found" -InformationAction Continue
+            }
         }
         $exitCode = $result.ExitCode
     }
@@ -1934,13 +2214,46 @@ switch ($Command) {
                 }
                 $exitCode = $result.ExitCode
             }
+            "export" {
+                if (-not $Out) {
+                    Write-Host "[ERROR] -Out <path> is required for 'state export'" -ForegroundColor Red
+                    exit 1
+                }
+                Write-Information "[autosuite] State: exporting..." -InformationAction Continue
+                $result = Invoke-StateExportCore -OutPath $Out
+                if ($result.Success) {
+                    Write-Information "[autosuite] State: export completed to $($result.OutputPath)" -InformationAction Continue
+                } else {
+                    Write-Information "[autosuite] State: export failed" -InformationAction Continue
+                }
+                $exitCode = $result.ExitCode
+            }
+            "import" {
+                if (-not $In) {
+                    Write-Host "[ERROR] -In <path> is required for 'state import'" -ForegroundColor Red
+                    exit 1
+                }
+                $replaceMode = $Replace.IsPresent
+                $modeLabel = if ($replaceMode) { "replace" } else { "merge" }
+                Write-Information "[autosuite] State: importing ($modeLabel)..." -InformationAction Continue
+                $result = Invoke-StateImportCore -InPath $In -ReplaceMode $replaceMode
+                if ($result.Success) {
+                    Write-Information "[autosuite] State: import completed ($($result.Mode))" -InformationAction Continue
+                } else {
+                    Write-Information "[autosuite] State: import failed - $($result.Error)" -InformationAction Continue
+                }
+                $exitCode = $result.ExitCode
+            }
             default {
                 if ($SubCommand) {
                     Write-Host "[ERROR] Unknown state subcommand: $SubCommand" -ForegroundColor Red
                 } else {
-                    Write-Host "[ERROR] State command requires a subcommand (e.g., 'reset')" -ForegroundColor Red
+                    Write-Host "[ERROR] State command requires a subcommand (e.g., 'reset', 'export', 'import')" -ForegroundColor Red
                 }
-                Write-Host "Usage: .\autosuite.ps1 state reset" -ForegroundColor Yellow
+                Write-Host "Usage:" -ForegroundColor Yellow
+                Write-Host "  .\autosuite.ps1 state reset" -ForegroundColor Yellow
+                Write-Host "  .\autosuite.ps1 state export -Out <path>" -ForegroundColor Yellow
+                Write-Host "  .\autosuite.ps1 state import -In <path> [-Merge] [-Replace]" -ForegroundColor Yellow
                 $exitCode = 1
             }
         }

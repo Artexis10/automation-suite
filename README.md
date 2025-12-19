@@ -109,6 +109,50 @@ Drift detection compares current state against a manifest:
 [autosuite] Drift: Missing=2 Extra=5 VersionMismatches=0
 ```
 
+### Machine-Readable Reports
+
+Generate JSON reports for automation pipelines:
+
+```powershell
+# JSON to stdout (pure JSON, no wrapper text)
+.\autosuite.ps1 report -Json
+
+# JSON to stdout AND file (atomic write)
+.\autosuite.ps1 report -Json -Out report.json
+
+# Include drift against a manifest
+.\autosuite.ps1 report -Json -Manifest provisioning/manifests/hugo-win11.jsonc
+```
+
+JSON output includes: `schemaVersion`, `timestampUtc`, state snapshot, optional manifest hash/path, and drift summary.
+
+### Portable State (Export/Import)
+
+Transfer state between machines or backup/restore:
+
+```powershell
+# Export state (atomic write, valid schema even if empty)
+.\autosuite.ps1 state export -Out backup-state.json
+
+# Import with merge (default: newer timestamps win)
+.\autosuite.ps1 state import -In backup-state.json
+
+# Import with replace (backup existing first)
+.\autosuite.ps1 state import -In backup-state.json -Replace
+```
+
+**Merge behavior:** Incoming `lastApplied`/`lastVerify` overwrites only if timestamp is newer.
+
+**Replace behavior:** Backs up existing state to `.autosuite/backup/state.<timestamp>.json` before replacing.
+
+### Output Stream Hygiene
+
+Stable wrapper lines use **Information stream (6)**, not stdout:
+
+- `report -Json` outputs **only** valid JSON to stdout (stream 1)
+- Wrapper lines like `[autosuite] ...` go to stream 6
+- Capture wrapper lines with: `$output = & .\autosuite.ps1 verify ... 6>&1`
+
 ---
 
 ## Supporting Tools

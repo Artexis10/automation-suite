@@ -280,7 +280,18 @@ cd provisioning
 | `-Latest` | true | Show most recent run (default behavior) |
 | `-RunId <id>` | - | Show specific run by ID (mutually exclusive with -Latest/-Last) |
 | `-Last <n>` | - | Show N most recent runs in compact list format |
-| `-Json` | false | Output as machine-readable JSON (no color formatting) |
+| `-Json` | false | Output as machine-readable JSON (pure JSON to stdout, no wrapper text) |
+| `-Out <path>` | - | Write JSON to file (atomic write); requires `-Json` |
+
+### State Command Options
+
+| Subcommand | Options | Description |
+|------------|---------|-------------|
+| `reset` | - | Delete `.autosuite/state.json` (non-destructive) |
+| `export` | `-Out <path>` | Export state to file (atomic, valid schema even if empty) |
+| `import` | `-In <path>` | Import state from file |
+| | `[-Merge]` | (default) Merge incoming; newer timestamps win |
+| | `[-Replace]` | Replace entirely; backup existing to `.autosuite/backup/` first |
 
 ### Vendored Pester Policy
 
