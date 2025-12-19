@@ -144,6 +144,14 @@ cd provisioning
 # WARNING: This removes apps from root manifest that are not in new capture
 .\cli.ps1 -Command capture -Profile my-machine -Update -PruneMissingApps
 
+# Generate a plan first, review it, then apply that exact plan
+.\cli.ps1 -Command plan -Manifest .\manifests\my-machine.jsonc
+# Review the plan in plans/<runId>.json, then:
+.\cli.ps1 -Command apply -Plan .\plans\<runId>.json
+
+# Apply from plan with dry-run preview
+.\cli.ps1 -Command apply -Plan .\plans\20251219-010000.json -DryRun
+
 # Capture to explicit path (legacy mode, backward compatible)
 .\cli.ps1 -Command capture -OutManifest .\manifests\my-machine.jsonc
 
@@ -193,6 +201,7 @@ cd provisioning
 | `-DiscoverWriteManualInclude` | true (when -Discover) | Generate `./includes/<profile>-manual.jsonc` with commented suggestions (requires -Profile) |
 | `-Update` | false | Merge new capture into existing manifest instead of overwriting |
 | `-PruneMissingApps` | false | With -Update, remove apps no longer present (root manifest only, never includes) |
+| `-Plan` | - | Path to pre-generated plan file; mutually exclusive with -Manifest (apply command only) |
 
 ### Running Tests
 
@@ -214,6 +223,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-P
 
 # Run update capture tests
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\UpdateCapture.Tests.ps1"
+
+# Run apply-from-plan tests
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\ApplyFromPlan.Tests.ps1"
 ```
 
 ### Other Scripts
