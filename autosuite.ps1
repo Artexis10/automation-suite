@@ -178,12 +178,9 @@ function Get-GitSha {
 
 $script:VersionString = Get-AutosuiteVersion
 
-# Allow override of provisioning CLI path for testing
-$script:ProvisioningCliPath = if ($env:AUTOSUITE_PROVISIONING_CLI) {
-    $env:AUTOSUITE_PROVISIONING_CLI
-} else {
-    Join-Path $script:AutosuiteRoot "provisioning\cli.ps1"
-}
+# Provisioning CLI path will be resolved lazily by Get-ProvisioningCliPath function
+# to avoid calling Get-RepoRootPath before it's defined
+$script:ProvisioningCliPath = $null
 
 # Allow override of winget script for testing (path to .ps1 file)
 $script:WingetScript = $env:AUTOSUITE_WINGET_SCRIPT
@@ -702,6 +699,38 @@ function Show-Help {
     Write-Host ""
 }
 
+function Get-ProvisioningCliPath {
+    <#
+    .SYNOPSIS
+        Resolve provisioning CLI path using repo root resolution (lazy evaluation).
+    .DESCRIPTION
+        Priority: 1) AUTOSUITE_PROVISIONING_CLI env var (testing override)
+                  2) Repo root resolution (AUTOSUITE_ROOT -> repo-root.txt -> fallback)
+    #>
+    
+    # Check for testing override first
+    if ($env:AUTOSUITE_PROVISIONING_CLI) {
+        return $env:AUTOSUITE_PROVISIONING_CLI
+    }
+    
+    # Determine repo root using the same logic as profile resolution
+    $repoRoot = Get-RepoRootPath
+    
+    if (-not $repoRoot) {
+        # Fallback: if running from repo, use $PSScriptRoot
+        $repoRoot = $script:AutosuiteRoot
+        
+        # Verify this is actually a repo root by checking for provisioning directory
+        $provisioningDir = Join-Path $repoRoot "provisioning"
+        if (-not (Test-Path $provisioningDir)) {
+            # Not in repo and no configured repo root - return null
+            return $null
+        }
+    }
+    
+    return Join-Path $repoRoot "provisioning\cli.ps1"
+}
+
 function Resolve-ManifestPath {
     <#
     .SYNOPSIS
@@ -739,10 +768,22 @@ function Invoke-ProvisioningCli {
         [hashtable]$Arguments
     )
     
-    $cliPath = $script:ProvisioningCliPath
+    # Resolve provisioning CLI path (lazy evaluation)
+    $cliPath = Get-ProvisioningCliPath
+    
+    # Check if repo root resolution failed (cliPath is null)
+    if (-not $cliPath) {
+        Write-Host "[ERROR] Repo root not configured. Cannot locate provisioning CLI." -ForegroundColor Red
+        Write-Host "        Run 'autosuite bootstrap -RepoRoot <path>' or set AUTOSUITE_ROOT environment variable." -ForegroundColor Yellow
+        Write-Host "" -ForegroundColor Yellow
+        Write-Host "Example:" -ForegroundColor Cyan
+        Write-Host "  autosuite bootstrap -RepoRoot C:\Users\hugoa\Desktop\Projects\automation-suite" -ForegroundColor Cyan
+        return @{ Success = $false; ExitCode = 1; Error = "Repo root not configured" }
+    }
     
     if (-not (Test-Path $cliPath)) {
         Write-Host "[ERROR] Provisioning CLI not found: $cliPath" -ForegroundColor Red
+        Write-Host "        Verify repo root is configured correctly." -ForegroundColor Yellow
         return @{ Success = $false; ExitCode = 1; Error = "Provisioning CLI not found" }
     }
     
