@@ -126,7 +126,15 @@ param(
 
     # Bootstrap: repo root path
     [Parameter(Mandatory = $false)]
-    [string]$RepoRoot
+    [string]$RepoRoot,
+
+    # Parallel apply: enable parallel app installation via runspaces
+    [Parameter(Mandatory = $false)]
+    [switch]$Parallel,
+
+    # Parallel apply: max concurrent installations (default 3)
+    [Parameter(Mandatory = $false)]
+    [int]$Throttle = 3
 )
 
 $ErrorActionPreference = "Stop"
@@ -669,6 +677,8 @@ function Show-Help {
     Write-Host "    -DryRun            Preview changes without applying"
     Write-Host "    -OnlyApps          Install apps only (skip restore/verify)"
     Write-Host "    -EnableRestore     Enable config restoration during apply"
+    Write-Host "    -Parallel          Enable parallel app installation (opt-in)"
+    Write-Host "    -Throttle <int>    Max concurrent installs (default: 3, requires -Parallel)"
     Write-Host ""
     Write-Host "VERIFY OPTIONS:" -ForegroundColor Yellow
     Write-Host "    -Manifest <path>   Path to manifest file"
@@ -810,7 +820,9 @@ function Invoke-ApplyCore {
         [string]$ManifestPath,
         [bool]$IsDryRun,
         [bool]$IsOnlyApps,
-        [switch]$SkipStateWrite
+        [switch]$SkipStateWrite,
+        [bool]$IsParallel = $false,
+        [int]$ThrottleLimit = 3
     )
     
     Write-Output "[autosuite] Apply: reading manifest $ManifestPath"
@@ -828,29 +840,51 @@ function Invoke-ApplyCore {
     $upgraded = 0
     $timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
     
-    foreach ($app in $manifest.apps) {
-        $driver = Get-AppDriver -App $app
-        $appDisplayId = if ($driver -eq 'winget') { Get-AppWingetId -App $app } else { $app.id }
+    # Parallel execution path
+    if ($IsParallel) {
+        Write-Host ""
+        Write-Host "  [PARALLEL] Parallel mode enabled (throttle: $ThrottleLimit)" -ForegroundColor Cyan
         
-        if (-not $appDisplayId) {
-            Write-Host "  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
-            $skipped++
-            continue
+        # Load parallel module
+        $parallelModulePath = Join-Path $script:AutosuiteRoot "provisioning\engine\parallel.ps1"
+        if (-not (Test-Path $parallelModulePath)) {
+            Write-Host "  [ERROR] Parallel module not found: $parallelModulePath" -ForegroundColor Red
+            return @{ Success = $false; ExitCode = 1; Error = "Parallel module not found" }
         }
+        . $parallelModulePath
         
-        # Check if already installed using driver abstraction
-        $installStatus = Test-AppInstalledWithDriver -App $app
+        # Build list of apps to install (filter out already installed and non-winget)
+        $appsToProcess = @()
         
-        if ($installStatus.Installed) {
-            # Check version constraint if present
-            $versionConstraint = Parse-VersionConstraint -Constraint $app.version
+        foreach ($app in $manifest.apps) {
+            $driver = Get-AppDriver -App $app
+            $appDisplayId = if ($driver -eq 'winget') { Get-AppWingetId -App $app } else { $app.id }
             
-            if ($versionConstraint) {
-                $versionCheck = Test-VersionConstraint -InstalledVersion $installStatus.Version -Constraint $versionConstraint
+            if (-not $appDisplayId) {
+                Write-Host "  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
+                $skipped++
+                continue
+            }
+            
+            # Only winget apps can be parallelized
+            if ($driver -ne 'winget') {
+                Write-Host "  [SKIP] $appDisplayId - non-winget driver '$driver' not supported in parallel mode" -ForegroundColor Yellow
+                $skipped++
+                continue
+            }
+            
+            # Check if already installed
+            $installStatus = Test-AppInstalledWithDriver -App $app
+            
+            if ($installStatus.Installed) {
+                # Check version constraint if present
+                $versionConstraint = Parse-VersionConstraint -Constraint $app.version
                 
-                if (-not $versionCheck.Satisfied) {
-                    # Version mismatch - attempt upgrade for winget, report for custom
-                    if ($driver -eq 'winget') {
+                if ($versionConstraint) {
+                    $versionCheck = Test-VersionConstraint -InstalledVersion $installStatus.Version -Constraint $versionConstraint
+                    
+                    if (-not $versionCheck.Satisfied) {
+                        # Version mismatch - upgrades are sequential for safety
                         if ($IsDryRun) {
                             Write-Host "  [PLAN] $appDisplayId - would upgrade ($($versionCheck.Reason))" -ForegroundColor Cyan
                             $upgraded++
@@ -864,32 +898,155 @@ function Invoke-ApplyCore {
                                 $upgraded++
                             }
                         }
-                    } else {
-                        Write-Host "  [MANUAL] $appDisplayId - version mismatch, manual intervention needed ($($versionCheck.Reason))" -ForegroundColor Yellow
-                        $failed++
+                        continue
                     }
-                    continue
                 }
+                
+                Write-Host "  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
+                $skipped++
+                continue
             }
             
-            Write-Host "  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
-            $skipped++
-            continue
+            # App needs installation - add to processing list
+            $appsToProcess += @{
+                id = $app.id
+                ref = $appDisplayId
+                app = $app
+            }
         }
         
-        # Not installed - install it
-        if ($IsDryRun) {
-            Write-Host "  [PLAN] $appDisplayId - would install (driver: $driver)" -ForegroundColor Cyan
-            $installed++
+        if ($appsToProcess.Count -eq 0) {
+            Write-Host "  [INFO] No apps to install" -ForegroundColor DarkGray
         } else {
-            Write-Host "  [INSTALL] $appDisplayId (driver: $driver)" -ForegroundColor Green
-            $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $false
+            # Split into parallel-safe and sequential (unsafe)
+            $split = Split-AppsForParallel -Apps $appsToProcess
             
-            if ($result.Success) {
+            Write-Host "  [INFO] Apps to install: $($appsToProcess.Count) total" -ForegroundColor Cyan
+            Write-Host "    Parallel-safe: $($split.Parallel.Count)" -ForegroundColor DarkGray
+            Write-Host "    Sequential (unsafe): $($split.Sequential.Count)" -ForegroundColor DarkGray
+            Write-Host ""
+            
+            # Execute parallel-safe apps first
+            if ($split.Parallel.Count -gt 0) {
+                Write-Host "  === Parallel Installation ===" -ForegroundColor Cyan
+                
+                $wingetScriptPath = $script:WingetScript
+                $parallelResults = Invoke-ParallelAppInstall -Apps $split.Parallel -Throttle $ThrottleLimit -DryRun:$IsDryRun -WingetScriptPath $wingetScriptPath
+                
+                # Process results and output logs
+                foreach ($result in $parallelResults) {
+                    # Output captured log lines
+                    foreach ($line in $result.Output) {
+                        if ($line -match '\[ERROR\]') {
+                            Write-Host "  $line" -ForegroundColor Red
+                        } elseif ($line -match '\[OK\]') {
+                            Write-Host "  $line" -ForegroundColor Green
+                        } elseif ($line -match '\[DRY-RUN\]') {
+                            Write-Host "  $line" -ForegroundColor Cyan
+                        } else {
+                            Write-Host "  $line" -ForegroundColor DarkGray
+                        }
+                    }
+                    
+                    if ($result.Success) {
+                        $installed++
+                    } else {
+                        $failed++
+                    }
+                }
+                Write-Host ""
+            }
+            
+            # Execute sequential (unsafe) apps
+            if ($split.Sequential.Count -gt 0) {
+                Write-Host "  === Sequential Installation (Unsafe Apps) ===" -ForegroundColor Yellow
+                
+                foreach ($appInfo in $split.Sequential) {
+                    $app = $appInfo.app
+                    $appDisplayId = $appInfo.ref
+                    
+                    if ($IsDryRun) {
+                        Write-Host "  [PLAN] $appDisplayId - would install (sequential/unsafe)" -ForegroundColor Cyan
+                        $installed++
+                    } else {
+                        Write-Host "  [INSTALL] $appDisplayId (sequential/unsafe)" -ForegroundColor Green
+                        $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $false
+                        
+                        if ($result.Success) {
+                            $installed++
+                        } else {
+                            Write-Host "    [ERROR] Failed to install: $($result.Error)" -ForegroundColor Red
+                            $failed++
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        # Sequential execution path (original behavior)
+        foreach ($app in $manifest.apps) {
+            $driver = Get-AppDriver -App $app
+            $appDisplayId = if ($driver -eq 'winget') { Get-AppWingetId -App $app } else { $app.id }
+            
+            if (-not $appDisplayId) {
+                Write-Host "  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
+                $skipped++
+                continue
+            }
+            
+            # Check if already installed using driver abstraction
+            $installStatus = Test-AppInstalledWithDriver -App $app
+            
+            if ($installStatus.Installed) {
+                # Check version constraint if present
+                $versionConstraint = Parse-VersionConstraint -Constraint $app.version
+                
+                if ($versionConstraint) {
+                    $versionCheck = Test-VersionConstraint -InstalledVersion $installStatus.Version -Constraint $versionConstraint
+                    
+                    if (-not $versionCheck.Satisfied) {
+                        # Version mismatch - attempt upgrade for winget, report for custom
+                        if ($driver -eq 'winget') {
+                            if ($IsDryRun) {
+                                Write-Host "  [PLAN] $appDisplayId - would upgrade ($($versionCheck.Reason))" -ForegroundColor Cyan
+                                $upgraded++
+                            } else {
+                                Write-Host "  [UPGRADE] $appDisplayId ($($versionCheck.Reason))" -ForegroundColor Yellow
+                                $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $true
+                                if ($result.Success) {
+                                    $upgraded++
+                                } else {
+                                    Write-Host "    [WARN] Upgrade may have issues: $($result.Error)" -ForegroundColor Yellow
+                                    $upgraded++
+                                }
+                            }
+                        } else {
+                            Write-Host "  [MANUAL] $appDisplayId - version mismatch, manual intervention needed ($($versionCheck.Reason))" -ForegroundColor Yellow
+                            $failed++
+                        }
+                        continue
+                    }
+                }
+                
+                Write-Host "  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
+                $skipped++
+                continue
+            }
+            
+            # Not installed - install it
+            if ($IsDryRun) {
+                Write-Host "  [PLAN] $appDisplayId - would install (driver: $driver)" -ForegroundColor Cyan
                 $installed++
             } else {
-                Write-Host "    [ERROR] Failed to install: $($result.Error)" -ForegroundColor Red
-                $failed++
+                Write-Host "  [INSTALL] $appDisplayId (driver: $driver)" -ForegroundColor Green
+                $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $false
+                
+                if ($result.Success) {
+                    $installed++
+                } else {
+                    Write-Host "    [ERROR] Failed to install: $($result.Error)" -ForegroundColor Red
+                    $failed++
+                }
             }
         }
     }
@@ -2670,7 +2827,7 @@ switch ($Command) {
             exit 1
         }
         Write-Information "[autosuite] Apply: starting with manifest $resolvedPath" -InformationAction Continue
-        $result = Invoke-ApplyCore -ManifestPath $resolvedPath -IsDryRun $DryRun.IsPresent -IsOnlyApps $OnlyApps.IsPresent
+        $result = Invoke-ApplyCore -ManifestPath $resolvedPath -IsDryRun $DryRun.IsPresent -IsOnlyApps $OnlyApps.IsPresent -IsParallel $Parallel.IsPresent -ThrottleLimit $Throttle
         Write-Information "[autosuite] Apply: completed ExitCode=$($result.ExitCode)" -InformationAction Continue
         $exitCode = $result.ExitCode
     }

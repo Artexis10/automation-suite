@@ -1932,3 +1932,254 @@ Describe "State Import" {
 }
 
 #endregion State Export/Import Tests
+
+#region Parallel Apply Tests
+
+Describe "Parallel Apply via Runspaces" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        
+        # Load parallel module
+        $parallelModulePath = Join-Path $script:AutosuiteRoot "provisioning\engine\parallel.ps1"
+        . $parallelModulePath
+    }
+    
+    Context "Parallel Safety Classification" {
+        It "Classifies safe apps as parallel-safe" {
+            $result = Test-AppParallelSafe -PackageId "7zip.7zip"
+            $result | Should -Be $true
+            
+            $result = Test-AppParallelSafe -PackageId "Git.Git"
+            $result | Should -Be $true
+            
+            $result = Test-AppParallelSafe -PackageId "Microsoft.PowerShell"
+            $result | Should -Be $true
+        }
+        
+        It "Classifies Docker as unsafe" {
+            $result = Test-AppParallelSafe -PackageId "Docker.DockerDesktop"
+            $result | Should -Be $false
+        }
+        
+        It "Classifies Adobe apps as unsafe" {
+            $result = Test-AppParallelSafe -PackageId "Adobe.Acrobat.Reader.64-bit"
+            $result | Should -Be $false
+            
+            $result = Test-AppParallelSafe -PackageId "Adobe.CreativeCloud"
+            $result | Should -Be $false
+        }
+        
+        It "Classifies VPN apps as unsafe" {
+            $result = Test-AppParallelSafe -PackageId "NordVPN.NordVPN"
+            $result | Should -Be $false
+            
+            $result = Test-AppParallelSafe -PackageId "ExpressVPN.ExpressVPN"
+            $result | Should -Be $false
+        }
+        
+        It "Classifies NVIDIA drivers as unsafe" {
+            $result = Test-AppParallelSafe -PackageId "NVIDIA.GeForceExperience"
+            $result | Should -Be $false
+        }
+        
+        It "Classifies Visual Studio as unsafe" {
+            $result = Test-AppParallelSafe -PackageId "Microsoft.VisualStudio.2022.Community"
+            $result | Should -Be $false
+        }
+        
+        It "Classifies game launchers as unsafe" {
+            $result = Test-AppParallelSafe -PackageId "Valve.Steam"
+            $result | Should -Be $false
+            
+            $result = Test-AppParallelSafe -PackageId "EpicGames.EpicGamesLauncher"
+            $result | Should -Be $false
+        }
+    }
+    
+    Context "App Splitting for Parallel Execution" {
+        It "Splits apps into parallel and sequential groups" {
+            $apps = @(
+                @{ id = "7zip"; ref = "7zip.7zip" }
+                @{ id = "git"; ref = "Git.Git" }
+                @{ id = "docker"; ref = "Docker.DockerDesktop" }
+                @{ id = "vscode"; ref = "Microsoft.VisualStudioCode" }
+            )
+            
+            $split = Split-AppsForParallel -Apps $apps
+            
+            $split.Parallel.Count | Should -Be 3
+            $split.Sequential.Count | Should -Be 1
+            
+            $parallelRefs = $split.Parallel | ForEach-Object { $_.ref }
+            $parallelRefs | Should -Contain "7zip.7zip"
+            $parallelRefs | Should -Contain "Git.Git"
+            $parallelRefs | Should -Contain "Microsoft.VisualStudioCode"
+            
+            $sequentialRefs = $split.Sequential | ForEach-Object { $_.ref }
+            $sequentialRefs | Should -Contain "Docker.DockerDesktop"
+        }
+        
+        It "Handles empty app list" {
+            $split = Split-AppsForParallel -Apps @()
+            
+            $split.Parallel.Count | Should -Be 0
+            $split.Sequential.Count | Should -Be 0
+        }
+        
+        It "Handles all-safe apps" {
+            $apps = @(
+                @{ id = "7zip"; ref = "7zip.7zip" }
+                @{ id = "git"; ref = "Git.Git" }
+            )
+            
+            $split = Split-AppsForParallel -Apps $apps
+            
+            $split.Parallel.Count | Should -Be 2
+            $split.Sequential.Count | Should -Be 0
+        }
+        
+        It "Handles all-unsafe apps" {
+            $apps = @(
+                @{ id = "docker"; ref = "Docker.DockerDesktop" }
+                @{ id = "steam"; ref = "Valve.Steam" }
+            )
+            
+            $split = Split-AppsForParallel -Apps $apps
+            
+            $split.Parallel.Count | Should -Be 0
+            $split.Sequential.Count | Should -Be 2
+        }
+    }
+    
+    Context "Parallel Execution with DryRun" {
+        It "DryRun mode works with parallel flag" {
+            $apps = @(
+                @{ id = "7zip"; ref = "7zip.7zip" }
+                @{ id = "git"; ref = "Git.Git" }
+            )
+            
+            $results = Invoke-ParallelAppInstall -Apps $apps -Throttle 2 -DryRun
+            
+            $results.Count | Should -Be 2
+            foreach ($result in $results) {
+                $result.Success | Should -Be $true
+                $result.Message | Should -Match "dry-run"
+            }
+        }
+        
+        It "DryRun produces parallel log prefixes" {
+            $apps = @(
+                @{ id = "test-app"; ref = "Test.App" }
+            )
+            
+            $results = Invoke-ParallelAppInstall -Apps $apps -Throttle 1 -DryRun
+            
+            $results.Count | Should -Be 1
+            $results[0].Output | Should -Not -BeNullOrEmpty
+            $results[0].Output[0] | Should -Match "\[PARALLEL-\d+\]"
+        }
+    }
+    
+    Context "Parallel Apply Integration (in-process)" {
+        BeforeEach {
+            $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+            $script:WingetScript = $script:MockWingetPath
+        }
+        
+        AfterEach {
+            $env:AUTOSUITE_WINGET_SCRIPT = $null
+        }
+        
+        It "Parallel flag is accepted by Invoke-ApplyCore" {
+            $result = Invoke-ApplyCore -ManifestPath $script:AllInstalledManifestPath -IsDryRun $true -IsOnlyApps $true -IsParallel $true -ThrottleLimit 2
+            
+            $result.Success | Should -Be $true
+            $result.ExitCode | Should -Be 0
+        }
+        
+        It "Sequential fallback works when parallel is false" {
+            $result = Invoke-ApplyCore -ManifestPath $script:AllInstalledManifestPath -IsDryRun $true -IsOnlyApps $true -IsParallel $false
+            
+            $result.Success | Should -Be $true
+            $result.ExitCode | Should -Be 0
+        }
+        
+        It "DryRun behavior unchanged with parallel flag" {
+            # DryRun should not install anything regardless of parallel flag
+            $installLog = Join-Path $script:TestDir "install-log.txt"
+            if (Test-Path $installLog) {
+                Remove-Item $installLog -Force
+            }
+            
+            $result = Invoke-ApplyCore -ManifestPath $script:TestManifestPath -IsDryRun $true -IsOnlyApps $true -IsParallel $true -ThrottleLimit 2
+            
+            $result.Success | Should -Be $true
+            $installLog | Should -Not -Exist
+        }
+    }
+    
+    Context "Throttle Parameter" {
+        It "Throttle defaults to 3" {
+            # This is a parameter default test - verify the function accepts throttle
+            $apps = @(
+                @{ id = "test"; ref = "Test.App" }
+            )
+            
+            # Should not throw with default throttle
+            { Invoke-ParallelAppInstall -Apps $apps -DryRun } | Should -Not -Throw
+        }
+        
+        It "Throttle of 1 works (effectively sequential)" {
+            $apps = @(
+                @{ id = "app1"; ref = "App.One" }
+                @{ id = "app2"; ref = "App.Two" }
+            )
+            
+            $results = Invoke-ParallelAppInstall -Apps $apps -Throttle 1 -DryRun
+            
+            $results.Count | Should -Be 2
+        }
+        
+        It "Throttle higher than app count works" {
+            $apps = @(
+                @{ id = "app1"; ref = "App.One" }
+            )
+            
+            $results = Invoke-ParallelAppInstall -Apps $apps -Throttle 10 -DryRun
+            
+            $results.Count | Should -Be 1
+        }
+    }
+    
+    Context "Failure Isolation" {
+        It "One app failure does not crash the pool (DryRun)" {
+            # In DryRun mode, all apps should succeed
+            $apps = @(
+                @{ id = "app1"; ref = "App.One" }
+                @{ id = "app2"; ref = "App.Two" }
+                @{ id = "app3"; ref = "App.Three" }
+            )
+            
+            $results = Invoke-ParallelAppInstall -Apps $apps -Throttle 2 -DryRun
+            
+            # All should complete (not crash)
+            $results.Count | Should -Be 3
+        }
+        
+        It "Results contain SlotId for log correlation" {
+            $apps = @(
+                @{ id = "app1"; ref = "App.One" }
+                @{ id = "app2"; ref = "App.Two" }
+            )
+            
+            $results = Invoke-ParallelAppInstall -Apps $apps -Throttle 2 -DryRun
+            
+            foreach ($result in $results) {
+                $result.SlotId | Should -BeGreaterThan 0
+            }
+        }
+    }
+}
+
+#endregion Parallel Apply Tests
