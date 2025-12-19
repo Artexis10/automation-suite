@@ -2,13 +2,16 @@ BeforeAll {
     $script:AutosuiteRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $script:AutosuitePath = Join-Path $script:AutosuiteRoot "autosuite.ps1"
     
-    # Create mock provisioning CLI for testing argument forwarding
-    $script:MockCliDir = Join-Path $env:TEMP "autosuite-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    $script:MockCliPath = Join-Path $script:MockCliDir "mock-cli.ps1"
-    $script:CapturedArgsPath = Join-Path $script:MockCliDir "captured-args.json"
+    # Create test directory for mock files
+    $script:TestDir = Join-Path $env:TEMP "autosuite-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:MockCliPath = Join-Path $script:TestDir "mock-cli.ps1"
+    $script:MockWingetPath = Join-Path $script:TestDir "mock-winget.ps1"
+    $script:CapturedArgsPath = Join-Path $script:TestDir "captured-args.json"
+    $script:TestManifestPath = Join-Path $script:TestDir "test-manifest.jsonc"
     
-    New-Item -ItemType Directory -Path $script:MockCliDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $script:TestDir -Force | Out-Null
     
+    # Mock provisioning CLI
     $mockCliContent = @'
 param(
     [string]$Command,
@@ -42,15 +45,68 @@ $captured | ConvertTo-Json | Set-Content -Path $argsPath
 Write-Host "[mock-cli] Command: $Command"
 '@
     Set-Content -Path $script:MockCliPath -Value $mockCliContent
+    
+    # Mock winget command - simulates installed apps
+    $mockWingetContent = @'
+param(
+    [Parameter(Position=0)]
+    [string]$Action,
+    [string]$id,
+    [switch]$AcceptSourceAgreements,
+    [switch]$AcceptPackageAgreements,
+    [switch]$e
+)
+
+# Simulate installed apps list
+$installedApps = @"
+Name                                   Id                                   Version
+------------------------------------------------------------------------------------
+7-Zip                                  7zip.7zip                            23.01
+Git                                    Git.Git                              2.43.0
+"@
+
+if ($Action -eq "list") {
+    Write-Output $installedApps
+    exit 0
+}
+
+if ($Action -eq "install") {
+    # Record install attempt
+    $installLog = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "install-log.txt"
+    Add-Content -Path $installLog -Value "install:$id"
+    Write-Host "Installing $id..."
+    exit 0
+}
+
+exit 0
+'@
+    Set-Content -Path $script:MockWingetPath -Value $mockWingetContent
+    
+    # Create test manifest
+    $testManifest = @'
+{
+  "version": 1,
+  "name": "test-manifest",
+  "apps": [
+    { "id": "7zip-7zip", "refs": { "windows": "7zip.7zip" } },
+    { "id": "git-git", "refs": { "windows": "Git.Git" } },
+    { "id": "missing-app", "refs": { "windows": "Missing.App" } }
+  ],
+  "restore": [],
+  "verify": []
+}
+'@
+    Set-Content -Path $script:TestManifestPath -Value $testManifest
 }
 
 AfterAll {
-    # Cleanup mock CLI directory
-    if ($script:MockCliDir -and (Test-Path $script:MockCliDir)) {
-        Remove-Item -Path $script:MockCliDir -Recurse -Force -ErrorAction SilentlyContinue
+    # Cleanup test directory
+    if ($script:TestDir -and (Test-Path $script:TestDir)) {
+        Remove-Item -Path $script:TestDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # Clear env var
+    # Clear env vars
     $env:AUTOSUITE_PROVISIONING_CLI = $null
+    $env:AUTOSUITE_WINGET_SCRIPT = $null
 }
 
 Describe "Autosuite Root Orchestrator" {
@@ -68,38 +124,9 @@ Describe "Autosuite Root Orchestrator" {
             $outputStr = $output -join "`n"
             $outputStr | Should -Match "USAGE:"
             $outputStr | Should -Match "COMMANDS:"
-            $outputStr | Should -Match "apply"
             $outputStr | Should -Match "capture"
-            $outputStr | Should -Match "plan"
+            $outputStr | Should -Match "apply"
             $outputStr | Should -Match "verify"
-            $outputStr | Should -Match "report"
-            $outputStr | Should -Match "doctor"
-        }
-    }
-    
-    Context "Command Validation" {
-        It "Requires -Profile or -Manifest for apply" {
-            $output = pwsh -NoProfile -Command "& '$($script:AutosuitePath)' apply" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "Either -Profile or -Manifest is required"
-        }
-        
-        It "Requires -Profile or -Manifest for capture" {
-            $output = pwsh -NoProfile -Command "& '$($script:AutosuitePath)' capture" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "Either -Profile or -Manifest is required"
-        }
-        
-        It "Requires -Profile or -Manifest for plan" {
-            $output = pwsh -NoProfile -Command "& '$($script:AutosuitePath)' plan" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "Either -Profile or -Manifest is required"
-        }
-        
-        It "Requires -Profile or -Manifest for verify" {
-            $output = pwsh -NoProfile -Command "& '$($script:AutosuitePath)' verify" 2>&1
-            $outputStr = $output -join "`n"
-            $outputStr | Should -Match "Either -Profile or -Manifest is required"
         }
     }
     
@@ -115,17 +142,6 @@ Describe "Autosuite Root Orchestrator" {
             $env:AUTOSUITE_PROVISIONING_CLI = $null
         }
         
-        It "Emits stable delegation message for apply" {
-            # Write-Output is captured directly without subprocess
-            $output = & $script:AutosuitePath apply -Manifest "c:\test.jsonc" 2>&1
-            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
-        }
-        
-        It "Emits stable delegation message for capture" {
-            $output = & $script:AutosuitePath capture -Profile "test" 2>&1
-            $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
-        }
-        
         It "Emits stable delegation message for report" {
             $output = & $script:AutosuitePath report 2>&1
             $output | Should -Contain "[autosuite] Delegating to provisioning subsystem..."
@@ -138,7 +154,178 @@ Describe "Autosuite Root Orchestrator" {
     }
 }
 
-Describe "Autosuite Argument Forwarding" {
+Describe "Autosuite Capture Command" {
+    
+    Context "Default Output Path" {
+        It "Defaults to local/<machine>.jsonc when no -Out provided" {
+            $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
+            $output = & $script:AutosuitePath capture 2>&1
+            $outputStr = $output -join "`n"
+            
+            # Should target local/ directory
+            $outputStr | Should -Match "provisioning.manifests.local"
+            $outputStr | Should -Match "\.jsonc"
+            $env:AUTOSUITE_PROVISIONING_CLI = $null
+        }
+        
+        It "Uses -Out path when provided" {
+            $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
+            $customPath = Join-Path $script:TestDir "custom-output.jsonc"
+            $output = & $script:AutosuitePath capture -Out $customPath 2>&1
+            $outputStr = $output -join "`n"
+            
+            $outputStr | Should -Match "custom-output\.jsonc"
+            $env:AUTOSUITE_PROVISIONING_CLI = $null
+        }
+    }
+    
+    Context "Example Flag" {
+        It "Generates deterministic example manifest with -Example" {
+            $examplePath = Join-Path $script:TestDir "example-output.jsonc"
+            $output = & $script:AutosuitePath capture -Example -Out $examplePath 2>&1
+            
+            $examplePath | Should -Exist
+            $content = Get-Content $examplePath -Raw
+            
+            # Should contain expected apps
+            $content | Should -Match "7zip\.7zip"
+            $content | Should -Match "Git\.Git"
+            $content | Should -Match "Microsoft\.PowerShell"
+            
+            # Should NOT contain machine-specific data
+            $content | Should -Not -Match "captured"
+            $content | Should -Not -Match $env:COMPUTERNAME
+        }
+        
+        It "Example manifest has no timestamps" {
+            $examplePath = Join-Path $script:TestDir "example-notimestamp.jsonc"
+            & $script:AutosuitePath capture -Example -Out $examplePath 2>&1 | Out-Null
+            
+            $content = Get-Content $examplePath -Raw
+            # Should not have ISO timestamp pattern
+            $content | Should -Not -Match "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+        }
+    }
+}
+
+Describe "Autosuite Apply Command" {
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+        $installLog = Join-Path $script:TestDir "install-log.txt"
+        if (Test-Path $installLog) {
+            Remove-Item $installLog -Force
+        }
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+    }
+    
+    Context "DryRun Mode" {
+        It "Does not invoke winget install with -DryRun" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' apply -Manifest '$($script:TestManifestPath)' -DryRun -OnlyApps" 2>&1
+            $outputStr = $output -join "`n"
+            
+            # Should show PLAN for missing app
+            $outputStr | Should -Match "\[PLAN\].*Missing\.App"
+            
+            # Should NOT have actually installed anything
+            $installLog = Join-Path $script:TestDir "install-log.txt"
+            $installLog | Should -Not -Exist
+        }
+        
+        It "Emits stable wrapper lines" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' apply -Manifest '$($script:TestManifestPath)' -DryRun -OnlyApps" 2>&1
+            $outputStr = $output -join "`n"
+            
+            $outputStr | Should -Match "\[autosuite\] Apply: reading manifest"
+            $outputStr | Should -Match "\[autosuite\] Apply: installing apps"
+            $outputStr | Should -Match "\[autosuite\] Apply: completed"
+        }
+    }
+    
+    Context "Idempotent Installs" {
+        It "Skips already installed apps" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' apply -Manifest '$($script:TestManifestPath)' -DryRun -OnlyApps" 2>&1
+            $outputStr = $output -join "`n"
+            
+            # 7zip and Git are in mock installed list
+            $outputStr | Should -Match "\[SKIP\].*7zip\.7zip.*already installed"
+            $outputStr | Should -Match "\[SKIP\].*Git\.Git.*already installed"
+        }
+    }
+}
+
+Describe "Autosuite Verify Command" {
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+    }
+    
+    Context "Exit Codes" {
+        It "Exits 0 when all apps are installed" {
+            # Create manifest with only installed apps
+            $allInstalledManifest = Join-Path $script:TestDir "all-installed.jsonc"
+            $content = @'
+{
+  "version": 1,
+  "name": "all-installed",
+  "apps": [
+    { "id": "7zip", "refs": { "windows": "7zip.7zip" } },
+    { "id": "git", "refs": { "windows": "Git.Git" } }
+  ],
+  "restore": [],
+  "verify": []
+}
+'@
+            Set-Content -Path $allInstalledManifest -Value $content
+            
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$allInstalledManifest'" 2>&1
+            $exitCode = $LASTEXITCODE
+            
+            $exitCode | Should -Be 0
+        }
+        
+        It "Exits 1 when apps are missing" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
+            $exitCode = $LASTEXITCODE
+            
+            $exitCode | Should -Be 1
+        }
+    }
+    
+    Context "Summary Output" {
+        It "Shows OK count and missing count" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
+            $outputStr = $output -join "`n"
+            
+            $outputStr | Should -Match "Installed OK.*2"
+            $outputStr | Should -Match "Missing.*1"
+        }
+        
+        It "Lists missing apps" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
+            $outputStr = $output -join "`n"
+            
+            $outputStr | Should -Match "Missing\.App"
+        }
+        
+        It "Emits stable wrapper lines" {
+            $output = pwsh -NoProfile -Command "`$env:AUTOSUITE_WINGET_SCRIPT='$($script:MockWingetPath)'; & '$($script:AutosuitePath)' verify -Manifest '$($script:TestManifestPath)'" 2>&1
+            $outputStr = $output -join "`n"
+            
+            $outputStr | Should -Match "\[autosuite\] Verify: checking manifest"
+            $outputStr | Should -Match "\[autosuite\] Verify: (PASSED|FAILED)"
+        }
+    }
+}
+
+Describe "Autosuite Report and Doctor Commands" {
     
     BeforeAll {
         $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
@@ -154,79 +341,6 @@ Describe "Autosuite Argument Forwarding" {
         }
     }
     
-    Context "Apply Command" {
-        It "Forwards -Manifest to provisioning" {
-            & $script:AutosuitePath apply -Manifest "c:\test\manifest.jsonc" 2>&1 | Out-Null
-            
-            $script:CapturedArgsPath | Should -Exist
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "apply"
-            $captured.Manifest | Should -Be "c:\test\manifest.jsonc"
-        }
-        
-        It "Forwards -DryRun to provisioning" {
-            & $script:AutosuitePath apply -Manifest "c:\test\manifest.jsonc" -DryRun 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "apply"
-            $captured.DryRun | Should -Be $true
-        }
-        
-        It "Forwards -EnableRestore to provisioning" {
-            & $script:AutosuitePath apply -Manifest "c:\test\manifest.jsonc" -EnableRestore 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "apply"
-            $captured.EnableRestore | Should -Be $true
-        }
-        
-        It "Resolves -Profile to manifest path" {
-            & $script:AutosuitePath apply -Profile "my-profile" 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "apply"
-            $captured.Manifest | Should -Match "my-profile\.jsonc$"
-        }
-    }
-    
-    Context "Capture Command" {
-        It "Forwards -Profile to provisioning" {
-            & $script:AutosuitePath capture -Profile "my-profile" 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "capture"
-            $captured.Profile | Should -Be "my-profile"
-        }
-        
-        It "Forwards -Manifest as -OutManifest" {
-            & $script:AutosuitePath capture -Manifest "c:\test\output.jsonc" 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "capture"
-            $captured.OutManifest | Should -Be "c:\test\output.jsonc"
-        }
-    }
-    
-    Context "Plan Command" {
-        It "Forwards -Manifest to provisioning" {
-            & $script:AutosuitePath plan -Manifest "c:\test\manifest.jsonc" 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "plan"
-            $captured.Manifest | Should -Be "c:\test\manifest.jsonc"
-        }
-    }
-    
-    Context "Verify Command" {
-        It "Forwards -Manifest to provisioning" {
-            & $script:AutosuitePath verify -Manifest "c:\test\manifest.jsonc" 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "verify"
-            $captured.Manifest | Should -Be "c:\test\manifest.jsonc"
-        }
-    }
-    
     Context "Report Command" {
         It "Forwards -Latest to provisioning" {
             & $script:AutosuitePath report -Latest 2>&1 | Out-Null
@@ -234,22 +348,6 @@ Describe "Autosuite Argument Forwarding" {
             $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
             $captured.Command | Should -Be "report"
             $captured.Latest | Should -Be $true
-        }
-        
-        It "Forwards -RunId to provisioning" {
-            & $script:AutosuitePath report -RunId "20251219-010000" 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "report"
-            $captured.RunId | Should -Be "20251219-010000"
-        }
-        
-        It "Forwards -Last to provisioning" {
-            & $script:AutosuitePath report -Last 5 2>&1 | Out-Null
-            
-            $captured = Get-Content $script:CapturedArgsPath | ConvertFrom-Json
-            $captured.Command | Should -Be "report"
-            $captured.Last | Should -Be 5
         }
         
         It "Forwards -Json to provisioning" {

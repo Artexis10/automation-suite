@@ -121,42 +121,50 @@ Every meaningful action must be verifiable. "It ran" is not success—success me
 
 ### Autosuite Commands (Primary Entrypoint)
 
-`powershell
-# Apply a profile (installs apps, optionally restores configs)
-.\autosuite.ps1 apply -Profile hugo-win11
+#### Capture → Apply → Verify Loop
 
-# Preview what would be applied (dry-run)
-.\autosuite.ps1 apply -Profile hugo-win11 -DryRun
+```powershell
+# CAPTURE: Export current machine state to local manifest (gitignored)
+.\autosuite.ps1 capture
+# Output: provisioning/manifests/local/<machine>.jsonc
 
-# Apply with config restoration enabled
-.\autosuite.ps1 apply -Profile hugo-win11 -EnableRestore
+# Capture to specific path
+.\autosuite.ps1 capture -Out my-manifest.jsonc
 
-# Capture current machine state to a profile
-.\autosuite.ps1 capture -Profile hugo-win11
+# Generate sanitized example manifest (no machine/timestamps)
+.\autosuite.ps1 capture -Example
 
-# Generate execution plan from profile
-.\autosuite.ps1 plan -Profile hugo-win11
+# APPLY: Install apps from manifest
+.\autosuite.ps1 apply -Manifest provisioning/manifests/fixture-test.jsonc
 
-# Verify current state matches profile
-.\autosuite.ps1 verify -Profile hugo-win11
+# Preview what would be installed (dry-run)
+.\autosuite.ps1 apply -Manifest manifest.jsonc -DryRun
 
-# Show most recent provisioning run
+# Install apps only (skip auto-verify at end)
+.\autosuite.ps1 apply -Manifest manifest.jsonc -OnlyApps
+
+# VERIFY: Check all apps are installed
+.\autosuite.ps1 verify -Manifest provisioning/manifests/fixture-test.jsonc
+# Exit code: 0 = all installed, 1 = missing apps
+
+# Other commands
 .\autosuite.ps1 report -Latest
-
-# Show last 5 runs
-.\autosuite.ps1 report -Last 5
-
-# Show specific run by ID
-.\autosuite.ps1 report -RunId 20251219-010000
-
-# Output report as JSON
-.\autosuite.ps1 report -Json
-
-# Diagnose environment issues
 .\autosuite.ps1 doctor
-`
+```
 
-Use `-Manifest <path>` instead of `-Profile` to specify a manifest file directly.
+#### Manifest Policy
+
+| Path | Purpose |
+|------|---------|
+| `provisioning/manifests/fixture-test.jsonc` | Committed test fixture (deterministic) |
+| `provisioning/manifests/local/` | Machine-specific captures (gitignored) |
+
+#### Environment Variables for Testing
+
+| Variable | Description |
+|----------|-------------|
+| `AUTOSUITE_PROVISIONING_CLI` | Override path to provisioning CLI |
+| `AUTOSUITE_WINGET_SCRIPT` | Override winget with mock script for testing |
 
 ### Provisioning Commands
 
