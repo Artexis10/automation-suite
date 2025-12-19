@@ -41,7 +41,9 @@ automation-suite/
 │   ├── restorers/          # Config restoration (copy, merge-json, merge-ini, append)
 │   ├── verifiers/          # State verification (file-exists)
 │   ├── manifests/          # User manifest files
-│   │   └── includes/       # Template and modular manifest includes
+│   │   ├── includes/       # Template and modular manifest includes
+│   │   ├── local/          # Machine-specific captures (gitignored)
+│   │   └── fixture-test.jsonc  # Deterministic test fixture (committed)
 │   ├── plans/              # Generated execution plans
 │   ├── state/              # Run history and checksums
 │   ├── logs/               # Execution logs
