@@ -66,7 +66,11 @@ automation-suite/
 # Capture to specific path
 .\autosuite.ps1 capture -Out my-manifest.jsonc
 
-# Generate sanitized example manifest (no machine/timestamps)
+# Generate sanitized example manifest (no machine/timestamps, stable sort)
+.\autosuite.ps1 capture -Sanitize -Name example-windows-core
+# Output: provisioning/manifests/examples/example-windows-core.jsonc
+
+# Legacy: Generate static example manifest
 .\autosuite.ps1 capture -Example
 
 # 2. APPLY: Install apps from manifest
@@ -122,8 +126,20 @@ The `verify` command emits a drift summary line:
 | Path | Purpose |
 |------|---------|
 | `provisioning/manifests/fixture-test.jsonc` | Committed test fixture (deterministic) |
+| `provisioning/manifests/examples/` | Sanitized example manifests (committed, shareable) |
 | `provisioning/manifests/local/` | Machine-specific captures (gitignored) |
 | `.autosuite/state.json` | State file for drift detection (gitignored) |
+
+### Capture Options
+
+| Option | Description |
+|--------|-------------|
+| `-Out <path>` | Output path (overrides all defaults) |
+| `-Sanitize` | Remove machine-specific fields, secrets, local paths; stable sort |
+| `-Name <string>` | Manifest name (used for filename when `-Sanitize`) |
+| `-ExamplesDir <path>` | Examples directory (default: `provisioning/manifests/examples/`) |
+| `-Force` | Overwrite existing example manifests without prompting |
+| `-Example` | (Legacy) Generate static example manifest |
 
 ---
 

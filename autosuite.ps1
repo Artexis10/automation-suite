@@ -72,6 +72,18 @@ param(
     [switch]$Example,
 
     [Parameter(Mandatory = $false)]
+    [switch]$Sanitize,
+
+    [Parameter(Mandatory = $false)]
+    [string]$Name,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExamplesDir,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Force,
+
+    [Parameter(Mandatory = $false)]
     [switch]$DryRun,
 
     [Parameter(Mandatory = $false)]
@@ -113,6 +125,9 @@ $script:WingetScript = $env:AUTOSUITE_WINGET_SCRIPT
 
 # Local manifests directory (gitignored)
 $script:LocalManifestsDir = Join-Path $script:AutosuiteRoot "provisioning\manifests\local"
+
+# Examples directory (committed, shareable)
+$script:ExamplesManifestsDir = Join-Path $script:AutosuiteRoot "provisioning\manifests\examples"
 
 # State directory (repo-local, gitignored)
 $script:AutosuiteStateDir = Join-Path $script:AutosuiteRoot ".autosuite"
@@ -323,8 +338,12 @@ function Show-Help {
     Write-Host "    state     Manage autosuite state (subcommands: reset)"
     Write-Host ""
     Write-Host "CAPTURE OPTIONS:" -ForegroundColor Yellow
-    Write-Host "    -Out <path>        Output path (default: provisioning/manifests/local/<machine>.jsonc)"
-    Write-Host "    -Example           Generate sanitized example manifest (no machine/timestamps)"
+    Write-Host "    -Out <path>        Output path (overrides all defaults)"
+    Write-Host "    -Sanitize          Remove machine-specific fields, secrets, local paths; stable sort"
+    Write-Host "    -Name <string>     Manifest name (used for filename when -Sanitize)"
+    Write-Host "    -ExamplesDir <p>   Examples directory (default: provisioning/manifests/examples/)"
+    Write-Host "    -Force             Overwrite existing example manifests without prompting"
+    Write-Host "    -Example           (Legacy) Generate sanitized example manifest"
     Write-Host ""
     Write-Host "APPLY OPTIONS:" -ForegroundColor Yellow
     Write-Host "    -Manifest <path>   Path to manifest file"
@@ -345,9 +364,10 @@ function Show-Help {
     Write-Host "    reset              Delete .autosuite/state.json (non-destructive)"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
-    Write-Host "    .\autosuite.ps1 capture                          # Capture to local/<machine>.jsonc"
-    Write-Host "    .\autosuite.ps1 capture -Out my-manifest.jsonc   # Capture to specific path"
-    Write-Host "    .\autosuite.ps1 capture -Example                 # Generate example fixture"
+    Write-Host "    .\autosuite.ps1 capture                                    # Capture to local/<machine>.jsonc"
+    Write-Host "    .\autosuite.ps1 capture -Out my-manifest.jsonc             # Capture to specific path"
+    Write-Host "    .\autosuite.ps1 capture -Sanitize -Name example-win-core   # Sanitized to examples/"
+    Write-Host "    .\autosuite.ps1 capture -Example                           # (Legacy) Generate example fixture"
     Write-Host "    .\autosuite.ps1 apply -Manifest manifest.jsonc   # Apply manifest"
     Write-Host "    .\autosuite.ps1 apply -Manifest manifest.jsonc -DryRun"
     Write-Host "    .\autosuite.ps1 verify -Manifest manifest.jsonc  # Verify apps installed"
@@ -1044,41 +1064,336 @@ function Write-ExampleManifest {
     return $Path
 }
 
+#region Bundle D - Sanitization Helpers
+
+<#
+.SYNOPSIS
+    Patterns for fields that look like secrets or local paths.
+#>
+$script:SensitiveFieldPatterns = @(
+    'password', 'secret', 'token', 'apikey', 'api_key', 'api-key',
+    'credential', 'auth', 'private', 'key'
+)
+
+$script:LocalPathPatterns = @(
+    '^[A-Za-z]:\\Users\\',
+    '^C:\\Users\\',
+    '^/home/',
+    '^/Users/',
+    '\$env:USERPROFILE',
+    '\$env:LOCALAPPDATA',
+    '\$env:APPDATA'
+)
+
+function Test-IsExamplesDirectory {
+    param([string]$Path)
+    
+    if (-not $Path) { return $false }
+    
+    try {
+        $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+        $examplesDir = [System.IO.Path]::GetFullPath($script:ExamplesManifestsDir)
+        return $resolvedPath.StartsWith($examplesDir, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
+function Test-PathLooksLikeSecret {
+    param([string]$Value)
+    
+    if (-not $Value) { return $false }
+    
+    $lowerValue = $Value.ToLower()
+    foreach ($pattern in $script:SensitiveFieldPatterns) {
+        if ($lowerValue -match $pattern) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-PathLooksLikeLocalPath {
+    param([string]$Value)
+    
+    if (-not $Value) { return $false }
+    
+    foreach ($pattern in $script:LocalPathPatterns) {
+        if ($Value -match $pattern) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-SanitizeManifest {
+    <#
+    .SYNOPSIS
+        Sanitize a manifest by removing machine-specific fields, secrets, and local paths.
+    .DESCRIPTION
+        - Removes 'captured' timestamp
+        - Removes 'machine' field if present
+        - Removes fields that look like secrets or local paths (best-effort)
+        - Sorts apps array by id for deterministic output
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Manifest,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$NewName
+    )
+    
+    $sanitized = @{}
+    
+    # Copy version
+    if ($Manifest.version) {
+        $sanitized.version = $Manifest.version
+    } else {
+        $sanitized.version = 1
+    }
+    
+    # Set name (use provided or strip machine-specific parts)
+    if ($NewName) {
+        $sanitized.name = $NewName
+    } elseif ($Manifest.name) {
+        # Remove machine name from existing name if present
+        $name = $Manifest.name -replace $env:COMPUTERNAME, '' -replace '--', '-' -replace '^-|-$', ''
+        $sanitized.name = if ($name) { $name.ToLower() } else { 'sanitized' }
+    } else {
+        $sanitized.name = 'sanitized'
+    }
+    
+    # DO NOT copy 'captured' timestamp - this is machine-specific
+    # DO NOT copy 'machine' field if present
+    
+    # Copy includes if present (but not machine-specific ones)
+    if ($Manifest.includes) {
+        $sanitized.includes = @($Manifest.includes | Where-Object { 
+            $_ -notmatch 'local/' -and $_ -notmatch $env:COMPUTERNAME
+        })
+        if ($sanitized.includes.Count -eq 0) {
+            $sanitized.Remove('includes')
+        }
+    }
+    
+    # Sanitize and sort apps
+    $sanitizedApps = @()
+    if ($Manifest.apps) {
+        foreach ($app in $Manifest.apps) {
+            $sanitizedApp = @{}
+            
+            # Copy safe fields
+            if ($app.id) { $sanitizedApp.id = $app.id }
+            if ($app.refs) { $sanitizedApp.refs = $app.refs }
+            if ($app.driver) { $sanitizedApp.driver = $app.driver }
+            if ($app.version) { $sanitizedApp.version = $app.version }
+            
+            # Copy custom config but sanitize paths
+            if ($app.custom) {
+                $sanitizedCustom = @{}
+                if ($app.custom.installScript -and -not (Test-PathLooksLikeLocalPath -Value $app.custom.installScript)) {
+                    $sanitizedCustom.installScript = $app.custom.installScript
+                }
+                if ($app.custom.detect) {
+                    $sanitizedDetect = @{}
+                    if ($app.custom.detect.type) { $sanitizedDetect.type = $app.custom.detect.type }
+                    # Only include path if it's not a user-specific path
+                    if ($app.custom.detect.path -and -not (Test-PathLooksLikeLocalPath -Value $app.custom.detect.path)) {
+                        $sanitizedDetect.path = $app.custom.detect.path
+                    }
+                    if ($app.custom.detect.key) { $sanitizedDetect.key = $app.custom.detect.key }
+                    if ($app.custom.detect.value) { $sanitizedDetect.value = $app.custom.detect.value }
+                    if ($sanitizedDetect.Count -gt 0) {
+                        $sanitizedCustom.detect = $sanitizedDetect
+                    }
+                }
+                if ($sanitizedCustom.Count -gt 0) {
+                    $sanitizedApp.custom = $sanitizedCustom
+                }
+            }
+            
+            # Skip apps that look like they contain secrets
+            $skipApp = $false
+            foreach ($key in $app.Keys) {
+                if (Test-PathLooksLikeSecret -Value $key) {
+                    $skipApp = $true
+                    break
+                }
+            }
+            
+            if (-not $skipApp -and $sanitizedApp.Count -gt 0) {
+                $sanitizedApps += $sanitizedApp
+            }
+        }
+        
+        # Sort apps by id for deterministic output
+        $sanitized.apps = @($sanitizedApps | Sort-Object -Property { $_.id })
+    } else {
+        $sanitized.apps = @()
+    }
+    
+    # Copy restore and verify arrays (empty by default for examples)
+    # Use explicit array creation to ensure non-null even when empty
+    $sanitized.restore = [System.Collections.ArrayList]::new()
+    $sanitized.verify = [System.Collections.ArrayList]::new()
+    
+    return $sanitized
+}
+
+#endregion Bundle D - Sanitization Helpers
+
 function Invoke-Capture {
     param(
         [string]$OutputPath,
-        [bool]$IsExample
+        [bool]$IsExample,
+        [bool]$IsSanitize,
+        [string]$ManifestName,
+        [string]$CustomExamplesDir,
+        [bool]$ForceOverwrite
     )
     
     Write-Output "[autosuite] Capture: starting..."
     
-    if ($IsExample) {
-        # Generate sanitized example manifest
-        $examplePath = if ($OutputPath) { $OutputPath } else { Join-Path $script:AutosuiteRoot "provisioning\manifests\example.jsonc" }
-        Write-Output "[autosuite] Capture: generating example manifest"
-        Write-ExampleManifest -Path $examplePath
-        Write-Host "[autosuite] Capture: example manifest written to $examplePath" -ForegroundColor Green
-        return
+    # Determine effective examples directory
+    $effectiveExamplesDir = if ($CustomExamplesDir) {
+        $CustomExamplesDir
+    } else {
+        $script:ExamplesManifestsDir
     }
     
-    # Default output path: local/<machine>.jsonc
-    $outPath = if ($OutputPath) {
-        $OutputPath
+    # Legacy -Example flag: generate static example manifest
+    if ($IsExample -and -not $IsSanitize) {
+        $examplePath = if ($OutputPath) { $OutputPath } else { Join-Path $script:AutosuiteRoot "provisioning\manifests\example.jsonc" }
+        Write-Output "[autosuite] Capture: generating example manifest"
+        $null = Write-ExampleManifest -Path $examplePath
+        Write-Host "[autosuite] Capture: example manifest written to $examplePath" -ForegroundColor Green
+        return @{ Success = $true; OutputPath = $examplePath; Sanitized = $false }
+    }
+    
+    # Determine output path based on flags
+    $outPath = $null
+    $isExamplesTarget = $false
+    
+    if ($OutputPath) {
+        # Explicit -Out overrides everything
+        $outPath = $OutputPath
+        $isExamplesTarget = Test-IsExamplesDirectory -Path $outPath
+    } elseif ($IsSanitize) {
+        # -Sanitize: output to examples directory
+        $fileName = if ($ManifestName) { 
+            "$($ManifestName.ToLower() -replace '\s+', '-').jsonc" 
+        } else { 
+            "sanitized.jsonc" 
+        }
+        
+        if (-not (Test-Path $effectiveExamplesDir)) {
+            New-Item -ItemType Directory -Path $effectiveExamplesDir -Force | Out-Null
+        }
+        $outPath = Join-Path $effectiveExamplesDir $fileName
+        $isExamplesTarget = $true
     } else {
+        # Default: local/<machine>.jsonc (gitignored)
         $machineName = $env:COMPUTERNAME.ToLower()
         if (-not (Test-Path $script:LocalManifestsDir)) {
             New-Item -ItemType Directory -Path $script:LocalManifestsDir -Force | Out-Null
         }
-        Join-Path $script:LocalManifestsDir "$machineName.jsonc"
+        $outPath = Join-Path $script:LocalManifestsDir "$machineName.jsonc"
     }
     
+    # GUARDRAIL: Block non-sanitized writes to examples directory
+    if ($isExamplesTarget -and -not $IsSanitize) {
+        Write-Host "[ERROR] Cannot write non-sanitized capture to examples directory." -ForegroundColor Red
+        Write-Host "        Use -Sanitize flag or choose a different output path." -ForegroundColor Yellow
+        Write-Output "[autosuite] Capture: BLOCKED - non-sanitized write to examples directory"
+        return @{ Success = $false; Error = "Non-sanitized write to examples directory blocked" }
+    }
+    
+    # GUARDRAIL: Prevent overwrite of existing example manifests without -Force
+    if ($isExamplesTarget -and (Test-Path $outPath) -and -not $ForceOverwrite) {
+        Write-Host "[ERROR] Example manifest already exists: $outPath" -ForegroundColor Red
+        Write-Host "        Use -Force to overwrite existing example manifests." -ForegroundColor Yellow
+        Write-Output "[autosuite] Capture: BLOCKED - example manifest exists, use -Force to overwrite"
+        return @{ Success = $false; Error = "Example manifest exists, use -Force to overwrite"; ExitCode = 1 }
+    }
+    
+    # Output path info to console (visible) and via Write-Output (for test capture)
+    Write-Host "[autosuite] Capture: output path is $outPath"
     Write-Output "[autosuite] Capture: output path is $outPath"
     
-    # Delegate to provisioning CLI for actual capture
-    $cliArgs = @{ OutManifest = $outPath }
-    Invoke-ProvisioningCli -ProvisioningCommand "capture" -Arguments $cliArgs
+    if ($IsSanitize) {
+        Write-Host "[autosuite] Capture: sanitization enabled"
+        Write-Output "[autosuite] Capture: sanitization enabled"
+        
+        # First capture to a temp location
+        $tempDir = Join-Path $env:TEMP "autosuite-capture-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $tempPath = Join-Path $tempDir "raw-capture.jsonc"
+        
+        # Delegate to provisioning CLI for raw capture
+        $cliArgs = @{ OutManifest = $tempPath }
+        $captureResult = Invoke-ProvisioningCli -ProvisioningCommand "capture" -Arguments $cliArgs
+        
+        if (-not (Test-Path $tempPath)) {
+            Write-Host "[ERROR] Raw capture failed - no output file generated" -ForegroundColor Red
+            return @{ Success = $false; Error = "Raw capture failed" }
+        }
+        
+        # Read and sanitize the manifest
+        $rawContent = Get-Content -Path $tempPath -Raw
+        $jsonContent = $rawContent -replace '//.*$', '' -replace '/\*[\s\S]*?\*/', ''
+        $rawManifest = $jsonContent | ConvertFrom-Json
+        
+        # Convert PSCustomObject to hashtable for sanitization
+        $manifestHash = @{}
+        $rawManifest.PSObject.Properties | ForEach-Object { 
+            $manifestHash[$_.Name] = $_.Value 
+        }
+        
+        # Sanitize
+        $sanitizedManifest = Invoke-SanitizeManifest -Manifest $manifestHash -NewName $ManifestName
+        
+        # Write sanitized manifest
+        $parentDir = Split-Path -Parent $outPath
+        if ($parentDir -and -not (Test-Path $parentDir)) {
+            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+        }
+        
+        # Add header comment for sanitized manifests
+        $header = @"
+{
+  // Sanitized example manifest
+  // Generated via: autosuite capture -Sanitize
+  // This file is safe to commit - no machine-specific data or timestamps
+
+"@
+        $jsonBody = ($sanitizedManifest | ConvertTo-Json -Depth 10).TrimStart('{')
+        $jsoncContent = $header + $jsonBody
+        
+        Set-Content -Path $outPath -Value $jsoncContent -Encoding UTF8
+        
+        # Cleanup temp
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        
+        Write-Host "[autosuite] Capture: sanitized manifest written to $outPath" -ForegroundColor Green
+        Write-Host "[autosuite] Capture: completed (sanitized, $($sanitizedManifest.apps.Count) apps)"
+        Write-Output "[autosuite] Capture: completed (sanitized, $($sanitizedManifest.apps.Count) apps)"
+        
+        return @{ 
+            Success = $true
+            OutputPath = $outPath
+            Sanitized = $true
+            AppCount = $sanitizedManifest.apps.Count
+        }
+    }
     
+    # Non-sanitized capture: delegate to provisioning CLI
+    $cliArgs = @{ OutManifest = $outPath }
+    $null = Invoke-ProvisioningCli -ProvisioningCommand "capture" -Arguments $cliArgs
+    
+    Write-Host "[autosuite] Capture: completed"
     Write-Output "[autosuite] Capture: completed"
+    return @{ Success = $true; OutputPath = $outPath; Sanitized = $false }
 }
 
 function Invoke-VerifyCore {
@@ -1504,7 +1819,12 @@ $exitCode = 0
 
 switch ($Command) {
     "capture" {
-        Invoke-Capture -OutputPath $Out -IsExample $Example.IsPresent
+        $captureResult = Invoke-Capture -OutputPath $Out -IsExample $Example.IsPresent -IsSanitize $Sanitize.IsPresent -ManifestName $Name -CustomExamplesDir $ExamplesDir -ForceOverwrite $Force.IsPresent
+        if ($captureResult -and $captureResult.ExitCode) {
+            $exitCode = $captureResult.ExitCode
+        } elseif ($captureResult -and -not $captureResult.Success) {
+            $exitCode = 1
+        }
     }
     "apply" {
         $resolvedPath = Resolve-ManifestPathWithValidation -ProfileName $Profile -ManifestPath $Manifest -CommandName "apply"

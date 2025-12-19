@@ -591,11 +591,91 @@ Bundle C introduces driver abstraction and version constraints for flexible app 
 - Manifests without `version` field skip version checking
 - Existing `refs.windows` format continues to work
 
+
+---
+
+## Bundle D — Capture Sanitization + Examples Pipeline + Guardrails
+
+Bundle D introduces sanitization for shareable example manifests and guardrails to prevent accidental commits of machine-specific data.
+
+### New Capture Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-Sanitize` | false | Remove machine-specific fields, secrets, local paths; stable sort by app.id |
+| `-Name <string>` | - | Manifest name (used for filename when `-Sanitize`) |
+| `-ExamplesDir <path>` | `provisioning/manifests/examples/` | Custom examples directory |
+| `-Force` | false | Overwrite existing example manifests without prompting |
+| `-Out <path>` | - | Output path (overrides all defaults) |
+
+### Capture Behavior
+
+| Command | Output Path | Sanitized |
+|---------|-------------|-----------|
+| `autosuite capture` | `provisioning/manifests/local/<machine>.jsonc` | No |
+| `autosuite capture -Sanitize -Name foo` | `provisioning/manifests/examples/foo.jsonc` | Yes |
+| `autosuite capture -Sanitize` | `provisioning/manifests/examples/sanitized.jsonc` | Yes |
+| `autosuite capture -Out custom.jsonc` | `custom.jsonc` | No |
+
+### Sanitization Process
+
+When `-Sanitize` is enabled:
+1. **Removes** `captured` timestamp field
+2. **Removes** `machine` field if present
+3. **Removes** fields that look like secrets (password, token, apikey, etc.)
+4. **Removes** local user paths (`C:\Users\...`, `/home/...`, `/Users/...`)
+5. **Sorts** apps array by `id` for deterministic output
+6. **Initializes** empty `restore` and `verify` arrays
+
+### Directory Policy
+
+| Path | Purpose | Git Status |
+|------|---------|------------|
+| `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
+| `provisioning/manifests/examples/` | Sanitized shareable manifests | **Committed** |
+
+### Guardrails
+
+1. **Non-sanitized write protection**: Cannot write non-sanitized capture to examples directory
+   - Error: `Cannot write non-sanitized capture to examples directory`
+   - Solution: Use `-Sanitize` flag or choose different output path
+
+2. **Overwrite protection**: Cannot overwrite existing example manifest without `-Force`
+   - Error: `Example manifest already exists: <path>`
+   - Solution: Use `-Force` to overwrite
+
+### Canonical Commands
+
+`powershell
+# Default capture (machine-specific, gitignored)
+autosuite capture
+
+# Sanitized capture for sharing
+autosuite capture -Sanitize -Name example-windows-core
+
+# Apply example manifest (dry-run)
+autosuite apply -Manifest provisioning/manifests/examples/example-windows-core.jsonc -DryRun
+
+# Verify example manifest
+autosuite verify -Manifest provisioning/manifests/examples/example-windows-core.jsonc
+`
+
+### Stable Output Markers
+
+`
+[autosuite] Capture: starting...
+[autosuite] Capture: output path is <path>
+[autosuite] Capture: sanitization enabled
+[autosuite] Capture: completed (sanitized, N apps)
+[autosuite] Capture: BLOCKED - non-sanitized write to examples directory
+[autosuite] Capture: BLOCKED - example manifest exists, use -Force to overwrite
+`
 ## References
 
 - [provisioning/readme.md](../provisioning/readme.md) - Full provisioning architecture
 - [contributing.md](../contributing.md) - Development conventions
 - [roadmap.md](../roadmap.md) - Future development plans
 - [tool-index.md](../tool-index.md) - Complete script index
+
 
 

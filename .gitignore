@@ -55,6 +55,9 @@ test-results.xml
 # Machine-specific captures (not committed)
 provisioning/manifests/local/
 
+# Examples directory IS committed (shareable, sanitized manifests)
+# !provisioning/manifests/examples/
+
 # Autosuite state directory (local machine state, not committed)
 .autosuite/
 

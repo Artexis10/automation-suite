@@ -185,7 +185,7 @@ Describe "Autosuite Capture Command" {
     Context "Default Output Path" {
         It "Defaults to local/<machine>.jsonc when no -Out provided" {
             $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
-            $output = & $script:AutosuitePath capture 2>&1
+            $output = & $script:AutosuitePath capture *>&1
             $outputStr = $output -join "`n"
             
             # Should target local/ directory
@@ -197,7 +197,7 @@ Describe "Autosuite Capture Command" {
         It "Uses -Out path when provided" {
             $env:AUTOSUITE_PROVISIONING_CLI = $script:MockCliPath
             $customPath = Join-Path $script:TestDir "custom-output.jsonc"
-            $output = & $script:AutosuitePath capture -Out $customPath 2>&1
+            $output = & $script:AutosuitePath capture -Out $customPath *>&1
             $outputStr = $output -join "`n"
             
             $outputStr | Should -Match "custom-output\.jsonc"
@@ -1209,3 +1209,319 @@ Describe "Bundle C: Drift with Version Mismatches" {
 }
 
 #endregion Bundle C Tests
+
+#region Bundle D Tests - Capture Sanitization + Examples Pipeline + Guardrails
+
+Describe "Bundle D: Capture Default Path" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+    }
+    
+    Context "Default Output Path Policy" {
+        It "Default capture path is under local/ directory (gitignored)" {
+            # The default path should be provisioning/manifests/local/<machine>.jsonc
+            $expectedLocalDir = Join-Path $script:AutosuiteRoot "provisioning\manifests\local"
+            $script:LocalManifestsDir | Should -Be $expectedLocalDir
+        }
+        
+        It "Examples directory path is correctly set" {
+            $expectedExamplesDir = Join-Path $script:AutosuiteRoot "provisioning\manifests\examples"
+            $script:ExamplesManifestsDir | Should -Be $expectedExamplesDir
+        }
+    }
+}
+
+Describe "Bundle D: Sanitization Functions" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        
+        $script:SanitizeTestDir = Join-Path $script:TestDir "sanitize-test"
+        New-Item -ItemType Directory -Path $script:SanitizeTestDir -Force | Out-Null
+    }
+    
+    AfterAll {
+        if ($script:SanitizeTestDir -and (Test-Path $script:SanitizeTestDir)) {
+            Remove-Item -Path $script:SanitizeTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Test-IsExamplesDirectory" {
+        It "Returns true for paths under examples directory" {
+            $examplesPath = Join-Path $script:ExamplesManifestsDir "test.jsonc"
+            $result = Test-IsExamplesDirectory -Path $examplesPath
+            $result | Should -Be $true
+        }
+        
+        It "Returns false for paths under local directory" {
+            $localPath = Join-Path $script:LocalManifestsDir "test.jsonc"
+            $result = Test-IsExamplesDirectory -Path $localPath
+            $result | Should -Be $false
+        }
+        
+        It "Returns false for arbitrary paths" {
+            $result = Test-IsExamplesDirectory -Path "C:\temp\test.jsonc"
+            $result | Should -Be $false
+        }
+        
+        It "Returns false for null path" {
+            $result = Test-IsExamplesDirectory -Path $null
+            $result | Should -Be $false
+        }
+    }
+    
+    Context "Test-PathLooksLikeSecret" {
+        It "Detects password-like field names" {
+            $result = Test-PathLooksLikeSecret -Value "userPassword"
+            $result | Should -Be $true
+        }
+        
+        It "Detects api key field names" {
+            $result = Test-PathLooksLikeSecret -Value "api_key"
+            $result | Should -Be $true
+            
+            $result = Test-PathLooksLikeSecret -Value "apiKey"
+            $result | Should -Be $true
+        }
+        
+        It "Detects token field names" {
+            $result = Test-PathLooksLikeSecret -Value "accessToken"
+            $result | Should -Be $true
+        }
+        
+        It "Returns false for normal field names" {
+            $result = Test-PathLooksLikeSecret -Value "appName"
+            $result | Should -Be $false
+            
+            $result = Test-PathLooksLikeSecret -Value "version"
+            $result | Should -Be $false
+        }
+    }
+    
+    Context "Test-PathLooksLikeLocalPath" {
+        It "Detects Windows user paths" {
+            $result = Test-PathLooksLikeLocalPath -Value "C:\Users\john\AppData\test.exe"
+            $result | Should -Be $true
+        }
+        
+        It "Detects Linux home paths" {
+            $result = Test-PathLooksLikeLocalPath -Value "/home/john/.config/app"
+            $result | Should -Be $true
+        }
+        
+        It "Detects macOS user paths" {
+            $result = Test-PathLooksLikeLocalPath -Value "/Users/john/Library/app"
+            $result | Should -Be $true
+        }
+        
+        It "Returns false for program files paths" {
+            $result = Test-PathLooksLikeLocalPath -Value "C:\Program Files\App\app.exe"
+            $result | Should -Be $false
+        }
+    }
+    
+    Context "Invoke-SanitizeManifest" {
+        It "Removes captured timestamp" {
+            $manifest = @{
+                version = 1
+                name = "test"
+                captured = "2025-01-01T00:00:00Z"
+                apps = @()
+            }
+            
+            $result = Invoke-SanitizeManifest -Manifest $manifest
+            
+            $result.Keys | Should -Not -Contain 'captured'
+        }
+        
+        It "Sets custom name when provided" {
+            $manifest = @{
+                version = 1
+                name = "old-name"
+                apps = @()
+            }
+            
+            $result = Invoke-SanitizeManifest -Manifest $manifest -NewName "new-name"
+            
+            $result.name | Should -Be "new-name"
+        }
+        
+        It "Sorts apps by id for deterministic output" {
+            $manifest = @{
+                version = 1
+                name = "test"
+                apps = @(
+                    @{ id = "zebra-app"; refs = @{ windows = "Zebra.App" } }
+                    @{ id = "alpha-app"; refs = @{ windows = "Alpha.App" } }
+                    @{ id = "middle-app"; refs = @{ windows = "Middle.App" } }
+                )
+            }
+            
+            $result = Invoke-SanitizeManifest -Manifest $manifest
+            
+            $result.apps[0].id | Should -Be "alpha-app"
+            $result.apps[1].id | Should -Be "middle-app"
+            $result.apps[2].id | Should -Be "zebra-app"
+        }
+        
+        It "Preserves app refs" {
+            $manifest = @{
+                version = 1
+                name = "test"
+                apps = @(
+                    @{ id = "test-app"; refs = @{ windows = "Test.App"; linux = "test-app" } }
+                )
+            }
+            
+            $result = Invoke-SanitizeManifest -Manifest $manifest
+            
+            $result.apps[0].refs.windows | Should -Be "Test.App"
+            $result.apps[0].refs.linux | Should -Be "test-app"
+        }
+        
+        It "Initializes empty restore and verify arrays" {
+            $manifest = @{
+                version = 1
+                name = "test"
+                apps = @()
+            }
+            
+            $result = Invoke-SanitizeManifest -Manifest $manifest
+            
+            # Arrays should exist as keys in the result
+            $result.Keys | Should -Contain 'restore'
+            $result.Keys | Should -Contain 'verify'
+            $result.restore.Count | Should -Be 0
+            $result.verify.Count | Should -Be 0
+        }
+    }
+}
+
+Describe "Bundle D: Capture Guardrails" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        
+        $script:GuardrailTestDir = Join-Path $script:TestDir "guardrail-test"
+        New-Item -ItemType Directory -Path $script:GuardrailTestDir -Force | Out-Null
+        
+        # Create a mock examples directory for testing
+        $script:MockExamplesDir = Join-Path $script:GuardrailTestDir "examples"
+        New-Item -ItemType Directory -Path $script:MockExamplesDir -Force | Out-Null
+        
+        # Override the examples directory for testing
+        $script:ExamplesManifestsDir = $script:MockExamplesDir
+    }
+    
+    AfterAll {
+        if ($script:GuardrailTestDir -and (Test-Path $script:GuardrailTestDir)) {
+            Remove-Item -Path $script:GuardrailTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Overwrite Protection" {
+        It "Blocks overwrite of existing example manifest without -Force" {
+            # Create existing example manifest
+            $existingExample = Join-Path $script:MockExamplesDir "existing.jsonc"
+            Set-Content -Path $existingExample -Value '{"version": 1, "apps": []}'
+            
+            # Attempt to capture to same path without -Force
+            $result = Invoke-Capture -OutputPath $existingExample -IsSanitize $true -ForceOverwrite $false
+            
+            $result.Success | Should -Be $false
+            $result.Error | Should -Match "use -Force"
+        }
+    }
+    
+    Context "Non-Sanitized Write Protection" {
+        It "Blocks non-sanitized capture to examples directory" {
+            $examplePath = Join-Path $script:MockExamplesDir "blocked.jsonc"
+            
+            # Attempt non-sanitized capture to examples dir
+            $result = Invoke-Capture -OutputPath $examplePath -IsSanitize $false -ForceOverwrite $false
+            
+            $result.Success | Should -Be $false
+            $result.Error | Should -Match "Non-sanitized write"
+        }
+    }
+}
+
+Describe "Bundle D: Example Manifest Structure" {
+    
+    BeforeAll {
+        $script:ExampleManifestPath = Join-Path $script:AutosuiteRoot "provisioning\manifests\examples\example-windows-core.jsonc"
+    }
+    
+    Context "Committed Example Manifest" {
+        It "Example manifest file exists" {
+            $script:ExampleManifestPath | Should -Exist
+        }
+        
+        It "Example manifest is valid JSONC" {
+            $content = Get-Content $script:ExampleManifestPath -Raw
+            # Strip comments
+            $jsonContent = $content -replace '//.*$', '' -replace '/\*[\s\S]*?\*/', ''
+            
+            { $jsonContent | ConvertFrom-Json } | Should -Not -Throw
+        }
+        
+        It "Example manifest has no captured timestamp" {
+            $content = Get-Content $script:ExampleManifestPath -Raw
+            $content | Should -Not -Match '"captured"'
+        }
+        
+        It "Example manifest has no machine name" {
+            $content = Get-Content $script:ExampleManifestPath -Raw
+            $content | Should -Not -Match $env:COMPUTERNAME
+        }
+        
+        It "Example manifest has expected structure" {
+            $content = Get-Content $script:ExampleManifestPath -Raw
+            $jsonContent = $content -replace '//.*$', '' -replace '/\*[\s\S]*?\*/', ''
+            $manifest = $jsonContent | ConvertFrom-Json
+            
+            $manifest.version | Should -Be 1
+            $manifest.name | Should -Be "example-windows-core"
+            $manifest.apps | Should -Not -BeNullOrEmpty
+            $manifest.apps.Count | Should -BeGreaterThan 0
+        }
+        
+        It "Example manifest apps are sorted by id" {
+            $content = Get-Content $script:ExampleManifestPath -Raw
+            $jsonContent = $content -replace '//.*$', '' -replace '/\*[\s\S]*?\*/', ''
+            $manifest = $jsonContent | ConvertFrom-Json
+            
+            $ids = $manifest.apps | ForEach-Object { $_.id }
+            $sortedIds = $ids | Sort-Object
+            
+            # Compare arrays
+            for ($i = 0; $i -lt $ids.Count; $i++) {
+                $ids[$i] | Should -Be $sortedIds[$i]
+            }
+        }
+    }
+}
+
+Describe "Bundle D: Capture Output Markers" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+    }
+    
+    Context "Stable Output Lines" {
+        It "Capture emits starting marker" {
+            # We can't fully test capture without winget, but we can test the function signature
+            # and that it emits the expected markers
+            $script:ExamplesManifestsDir = Join-Path $script:TestDir "examples-marker-test"
+            
+            # Test with legacy -Example flag which doesn't need winget
+            $examplePath = Join-Path $script:TestDir "marker-test-example.jsonc"
+            $output = Invoke-Capture -OutputPath $examplePath -IsExample $true 4>&1
+            
+            $output | Should -Contain "[autosuite] Capture: starting..."
+        }
+    }
+}
+
+#endregion Bundle D Tests
