@@ -137,6 +137,13 @@ cd provisioning
 # Capture with discovery but skip manual include generation
 .\cli.ps1 -Command capture -Profile my-machine -Discover -DiscoverWriteManualInclude $false
 
+# Update existing manifest (merge new apps, preserve includes/restore/verify)
+.\cli.ps1 -Command capture -Profile my-machine -Update
+
+# Update with pruning (remove apps no longer installed)
+# WARNING: This removes apps from root manifest that are not in new capture
+.\cli.ps1 -Command capture -Profile my-machine -Update -PruneMissingApps
+
 # Capture to explicit path (legacy mode, backward compatible)
 .\cli.ps1 -Command capture -OutManifest .\manifests\my-machine.jsonc
 
@@ -184,6 +191,8 @@ cd provisioning
 | `-IncludeVerifyTemplate` | false | Generate `./includes/<profile>-verify.jsonc` (requires -Profile) |
 | `-Discover` | false | Enable discovery mode: detect software present but not winget-managed |
 | `-DiscoverWriteManualInclude` | true (when -Discover) | Generate `./includes/<profile>-manual.jsonc` with commented suggestions (requires -Profile) |
+| `-Update` | false | Merge new capture into existing manifest instead of overwriting |
+| `-PruneMissingApps` | false | With -Update, remove apps no longer present (root manifest only, never includes) |
 
 ### Running Tests
 
@@ -202,6 +211,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-P
 
 # Run discovery tests
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Discovery.Tests.ps1"
+
+# Run update capture tests
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\UpdateCapture.Tests.ps1"
 ```
 
 ### Other Scripts
