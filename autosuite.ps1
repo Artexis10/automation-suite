@@ -414,44 +414,70 @@ function Invoke-ApplyCore {
     $installed = 0
     $skipped = 0
     $failed = 0
+    $upgraded = 0
     $timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
     
     foreach ($app in $manifest.apps) {
-        $wingetId = $app.refs.windows
-        if (-not $wingetId) {
-            Write-Host "  [SKIP] $($app.id) - no Windows ref" -ForegroundColor Yellow
+        $driver = Get-AppDriver -App $app
+        $appDisplayId = if ($driver -eq 'winget') { Get-AppWingetId -App $app } else { $app.id }
+        
+        if (-not $appDisplayId) {
+            Write-Host "  [SKIP] $($app.id) - no installable ref for driver '$driver'" -ForegroundColor Yellow
             $skipped++
             continue
         }
         
-        # Check if already installed
-        $isInstalled = Test-AppInstalled -WingetId $wingetId
+        # Check if already installed using driver abstraction
+        $installStatus = Test-AppInstalledWithDriver -App $app
         
-        if ($isInstalled) {
-            Write-Host "  [SKIP] $wingetId - already installed" -ForegroundColor DarkGray
+        if ($installStatus.Installed) {
+            # Check version constraint if present
+            $versionConstraint = Parse-VersionConstraint -Constraint $app.version
+            
+            if ($versionConstraint) {
+                $versionCheck = Test-VersionConstraint -InstalledVersion $installStatus.Version -Constraint $versionConstraint
+                
+                if (-not $versionCheck.Satisfied) {
+                    # Version mismatch - attempt upgrade for winget, report for custom
+                    if ($driver -eq 'winget') {
+                        if ($IsDryRun) {
+                            Write-Host "  [PLAN] $appDisplayId - would upgrade ($($versionCheck.Reason))" -ForegroundColor Cyan
+                            $upgraded++
+                        } else {
+                            Write-Host "  [UPGRADE] $appDisplayId ($($versionCheck.Reason))" -ForegroundColor Yellow
+                            $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $true
+                            if ($result.Success) {
+                                $upgraded++
+                            } else {
+                                Write-Host "    [WARN] Upgrade may have issues: $($result.Error)" -ForegroundColor Yellow
+                                $upgraded++
+                            }
+                        }
+                    } else {
+                        Write-Host "  [MANUAL] $appDisplayId - version mismatch, manual intervention needed ($($versionCheck.Reason))" -ForegroundColor Yellow
+                        $failed++
+                    }
+                    continue
+                }
+            }
+            
+            Write-Host "  [SKIP] $appDisplayId - already installed" -ForegroundColor DarkGray
             $skipped++
             continue
         }
         
+        # Not installed - install it
         if ($IsDryRun) {
-            Write-Host "  [PLAN] $wingetId - would install" -ForegroundColor Cyan
+            Write-Host "  [PLAN] $appDisplayId - would install (driver: $driver)" -ForegroundColor Cyan
             $installed++
         } else {
-            Write-Host "  [INSTALL] $wingetId" -ForegroundColor Green
-            try {
-                if ($script:WingetScript) {
-                    & pwsh -NoProfile -File $script:WingetScript install --id $wingetId 2>&1 | Out-Null
-                } else {
-                    & winget install --id $wingetId --accept-source-agreements --accept-package-agreements -e 2>&1 | Out-Null
-                }
-                if ($LASTEXITCODE -eq 0) {
-                    $installed++
-                } else {
-                    Write-Host "    [WARN] Install may have issues: exit code $LASTEXITCODE" -ForegroundColor Yellow
-                    $installed++
-                }
-            } catch {
-                Write-Host "    [ERROR] Failed to install: $_" -ForegroundColor Red
+            Write-Host "  [INSTALL] $appDisplayId (driver: $driver)" -ForegroundColor Green
+            $result = Install-AppWithDriver -App $app -DryRun $false -IsUpgrade $false
+            
+            if ($result.Success) {
+                $installed++
+            } else {
+                Write-Host "    [ERROR] Failed to install: $($result.Error)" -ForegroundColor Red
                 $failed++
             }
         }
@@ -460,6 +486,7 @@ function Invoke-ApplyCore {
     Write-Host ""
     Write-Host "[autosuite] Apply: Summary" -ForegroundColor Cyan
     Write-Host "  Installed: $installed"
+    Write-Host "  Upgraded:  $upgraded"
     Write-Host "  Skipped:   $skipped"
     if ($failed -gt 0) {
         Write-Host "  Failed:    $failed" -ForegroundColor Red
@@ -496,11 +523,11 @@ function Invoke-ApplyCore {
         $verifyResult = Invoke-VerifyCore -ManifestPath $ManifestPath -SkipStateWrite:$SkipStateWrite
     }
     
-    Write-Output "[autosuite] Apply: completed"
+    Write-Output "[autosuite] Apply: completed ExitCode=$(if ($failed -gt 0) { 1 } else { 0 })"
     
     # DryRun always succeeds; otherwise propagate verify result if run
     if ($IsDryRun) {
-        return @{ Success = $true; ExitCode = 0; Installed = $installed; Skipped = $skipped; Failed = $failed }
+        return @{ Success = $true; ExitCode = 0; Installed = $installed; Upgraded = $upgraded; Skipped = $skipped; Failed = $failed }
     }
     
     if ($verifyResult) {
@@ -508,13 +535,14 @@ function Invoke-ApplyCore {
             Success = $verifyResult.Success
             ExitCode = $verifyResult.ExitCode
             Installed = $installed
+            Upgraded = $upgraded
             Skipped = $skipped
             Failed = $failed
             VerifyResult = $verifyResult
         }
     }
     
-    return @{ Success = ($failed -eq 0); ExitCode = (if ($failed -gt 0) { 1 } else { 0 }); Installed = $installed; Skipped = $skipped; Failed = $failed }
+    return @{ Success = ($failed -eq 0); ExitCode = (if ($failed -gt 0) { 1 } else { 0 }); Installed = $installed; Upgraded = $upgraded; Skipped = $skipped; Failed = $failed }
 }
 
 function Get-InstalledApps {
@@ -538,6 +566,423 @@ function Test-AppInstalled {
     }
     return $false
 }
+
+#region Driver Abstraction (Bundle C)
+
+<#
+.SYNOPSIS
+    Parse version constraint string.
+.DESCRIPTION
+    Supports:
+    - Exact match: "1.2.3"
+    - Minimum: ">=1.2.3"
+    Returns hashtable with Type (exact|minimum) and Version.
+#>
+function Parse-VersionConstraint {
+    param([string]$Constraint)
+    
+    if (-not $Constraint) {
+        return $null
+    }
+    
+    $Constraint = $Constraint.Trim()
+    
+    if ($Constraint -match '^>=(.+)$') {
+        return @{
+            Type = 'minimum'
+            Version = $Matches[1].Trim()
+        }
+    } else {
+        return @{
+            Type = 'exact'
+            Version = $Constraint
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Compare two version strings.
+.DESCRIPTION
+    Returns:
+    - -1 if $Version1 < $Version2
+    - 0 if $Version1 == $Version2
+    - 1 if $Version1 > $Version2
+    Handles dotted version strings (e.g., 1.2.3, 2.43.0).
+#>
+function Compare-Versions {
+    param(
+        [string]$Version1,
+        [string]$Version2
+    )
+    
+    if (-not $Version1 -or -not $Version2) {
+        return $null
+    }
+    
+    # Split into parts and compare numerically
+    $parts1 = $Version1 -split '\.'
+    $parts2 = $Version2 -split '\.'
+    
+    $maxParts = [Math]::Max($parts1.Count, $parts2.Count)
+    
+    for ($i = 0; $i -lt $maxParts; $i++) {
+        $p1 = if ($i -lt $parts1.Count) { 
+            $num = 0
+            if ([int]::TryParse($parts1[$i], [ref]$num)) { $num } else { 0 }
+        } else { 0 }
+        
+        $p2 = if ($i -lt $parts2.Count) { 
+            $num = 0
+            if ([int]::TryParse($parts2[$i], [ref]$num)) { $num } else { 0 }
+        } else { 0 }
+        
+        if ($p1 -lt $p2) { return -1 }
+        if ($p1 -gt $p2) { return 1 }
+    }
+    
+    return 0
+}
+
+<#
+.SYNOPSIS
+    Test if installed version satisfies constraint.
+.DESCRIPTION
+    Returns hashtable with:
+    - Satisfied: $true/$false
+    - Reason: explanation string
+#>
+function Test-VersionConstraint {
+    param(
+        [string]$InstalledVersion,
+        [hashtable]$Constraint
+    )
+    
+    if (-not $Constraint) {
+        return @{ Satisfied = $true; Reason = 'no constraint' }
+    }
+    
+    if (-not $InstalledVersion -or $InstalledVersion -eq $true) {
+        # Unknown version - fail by default (CI-safe)
+        return @{ Satisfied = $false; Reason = 'version unknown' }
+    }
+    
+    $cmp = Compare-Versions -Version1 $InstalledVersion -Version2 $Constraint.Version
+    
+    if ($null -eq $cmp) {
+        return @{ Satisfied = $false; Reason = 'version comparison failed' }
+    }
+    
+    switch ($Constraint.Type) {
+        'exact' {
+            if ($cmp -eq 0) {
+                return @{ Satisfied = $true; Reason = "exact match $InstalledVersion" }
+            } else {
+                return @{ Satisfied = $false; Reason = "expected $($Constraint.Version), got $InstalledVersion" }
+            }
+        }
+        'minimum' {
+            if ($cmp -ge 0) {
+                return @{ Satisfied = $true; Reason = "$InstalledVersion >= $($Constraint.Version)" }
+            } else {
+                return @{ Satisfied = $false; Reason = "$InstalledVersion < $($Constraint.Version)" }
+            }
+        }
+        default {
+            return @{ Satisfied = $false; Reason = "unknown constraint type: $($Constraint.Type)" }
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Get driver for an app entry.
+.DESCRIPTION
+    Returns driver name: 'winget' (default) or 'custom'.
+#>
+function Get-AppDriver {
+    param([PSObject]$App)
+    
+    if ($App.driver) {
+        return $App.driver.ToLower()
+    }
+    return 'winget'
+}
+
+<#
+.SYNOPSIS
+    Get winget ID for an app.
+.DESCRIPTION
+    Supports both old format (refs.windows) and new format (id with driver=winget).
+#>
+function Get-AppWingetId {
+    param([PSObject]$App)
+    
+    # Prefer refs.windows for backward compatibility
+    if ($App.refs -and $App.refs.windows) {
+        return $App.refs.windows
+    }
+    
+    # Fallback: if driver is winget and no refs, use id as winget id
+    $driver = Get-AppDriver -App $App
+    if ($driver -eq 'winget' -and $App.id) {
+        return $App.id
+    }
+    
+    return $null
+}
+
+<#
+.SYNOPSIS
+    Validate custom driver install script path.
+.DESCRIPTION
+    Security: Only allow scripts under repo root.
+    Returns $true if path is safe, $false otherwise.
+#>
+function Test-CustomScriptPathSafe {
+    param([string]$ScriptPath)
+    
+    if (-not $ScriptPath) {
+        return $false
+    }
+    
+    # Resolve to absolute path
+    $absolutePath = if ([System.IO.Path]::IsPathRooted($ScriptPath)) {
+        $ScriptPath
+    } else {
+        Join-Path $script:AutosuiteRoot $ScriptPath
+    }
+    
+    try {
+        $resolvedPath = [System.IO.Path]::GetFullPath($absolutePath)
+        $repoRoot = [System.IO.Path]::GetFullPath($script:AutosuiteRoot)
+        
+        # Check if resolved path starts with repo root (prevent path traversal)
+        return $resolvedPath.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Test if custom app is installed using detect configuration.
+.DESCRIPTION
+    Supports detect types:
+    - file: check if file exists at path
+    - registry: check if registry key/value exists (optional)
+    Returns hashtable with Installed and Version (if detectable).
+#>
+function Test-CustomAppInstalled {
+    param([PSObject]$CustomConfig)
+    
+    if (-not $CustomConfig -or -not $CustomConfig.detect) {
+        return @{ Installed = $false; Version = $null; Error = 'no detect config' }
+    }
+    
+    $detect = $CustomConfig.detect
+    
+    switch ($detect.type) {
+        'file' {
+            if (-not $detect.path) {
+                return @{ Installed = $false; Version = $null; Error = 'file detect missing path' }
+            }
+            
+            # Expand environment variables in path
+            $expandedPath = [Environment]::ExpandEnvironmentVariables($detect.path)
+            $exists = Test-Path $expandedPath
+            
+            return @{ 
+                Installed = $exists
+                Version = $null  # File detection doesn't provide version
+                DetectPath = $expandedPath
+            }
+        }
+        'registry' {
+            if (-not $detect.key) {
+                return @{ Installed = $false; Version = $null; Error = 'registry detect missing key' }
+            }
+            
+            try {
+                $regValue = Get-ItemProperty -Path $detect.key -Name $detect.value -ErrorAction SilentlyContinue
+                if ($regValue) {
+                    $version = if ($detect.value) { $regValue.$($detect.value) } else { $null }
+                    return @{ Installed = $true; Version = $version }
+                }
+                return @{ Installed = $false; Version = $null }
+            } catch {
+                return @{ Installed = $false; Version = $null; Error = $_.ToString() }
+            }
+        }
+        default {
+            return @{ Installed = $false; Version = $null; Error = "unknown detect type: $($detect.type)" }
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Install custom app by running install script.
+.DESCRIPTION
+    Runs the installScript from custom config.
+    Returns hashtable with Success, ExitCode, Output.
+#>
+function Install-CustomApp {
+    param(
+        [PSObject]$App,
+        [bool]$DryRun = $false
+    )
+    
+    $customConfig = $App.custom
+    if (-not $customConfig -or -not $customConfig.installScript) {
+        return @{ Success = $false; ExitCode = 1; Error = 'no installScript defined' }
+    }
+    
+    $scriptPath = $customConfig.installScript
+    
+    # Security check: script must be under repo root
+    if (-not (Test-CustomScriptPathSafe -ScriptPath $scriptPath)) {
+        Write-Host "    [SECURITY] Install script path rejected (must be under repo root): $scriptPath" -ForegroundColor Red
+        return @{ Success = $false; ExitCode = 1; Error = 'script path outside repo root' }
+    }
+    
+    # Resolve to absolute path
+    $absoluteScript = if ([System.IO.Path]::IsPathRooted($scriptPath)) {
+        $scriptPath
+    } else {
+        Join-Path $script:AutosuiteRoot $scriptPath
+    }
+    
+    if (-not (Test-Path $absoluteScript)) {
+        return @{ Success = $false; ExitCode = 1; Error = "install script not found: $absoluteScript" }
+    }
+    
+    if ($DryRun) {
+        Write-Output "[autosuite] CustomDriver: would run $absoluteScript"
+        return @{ Success = $true; ExitCode = 0; DryRun = $true }
+    }
+    
+    Write-Output "[autosuite] CustomDriver: running $absoluteScript"
+    
+    try {
+        $output = & pwsh -NoProfile -File $absoluteScript 2>&1
+        $exitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        
+        return @{ 
+            Success = ($exitCode -eq 0)
+            ExitCode = $exitCode
+            Output = $output
+        }
+    } catch {
+        return @{ Success = $false; ExitCode = 1; Error = $_.ToString() }
+    }
+}
+
+<#
+.SYNOPSIS
+    Driver interface: Test if app is installed.
+.DESCRIPTION
+    Dispatches to appropriate driver based on app config.
+    Returns hashtable with Installed, Version, Driver.
+#>
+function Test-AppInstalledWithDriver {
+    param([PSObject]$App)
+    
+    $driver = Get-AppDriver -App $App
+    
+    switch ($driver) {
+        'winget' {
+            $wingetId = Get-AppWingetId -App $App
+            if (-not $wingetId) {
+                return @{ Installed = $false; Version = $null; Driver = 'winget'; Error = 'no winget id' }
+            }
+            
+            $installedMap = Get-InstalledAppsMap
+            $isInstalled = $installedMap.ContainsKey($wingetId)
+            $version = if ($isInstalled) { $installedMap[$wingetId] } else { $null }
+            
+            # Handle version being $true (installed but version unknown)
+            if ($version -eq $true) { $version = $null }
+            
+            return @{ 
+                Installed = $isInstalled
+                Version = $version
+                Driver = 'winget'
+                WingetId = $wingetId
+            }
+        }
+        'custom' {
+            $result = Test-CustomAppInstalled -CustomConfig $App.custom
+            $result.Driver = 'custom'
+            return $result
+        }
+        default {
+            return @{ Installed = $false; Version = $null; Driver = $driver; Error = "unknown driver: $driver" }
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Driver interface: Install app.
+.DESCRIPTION
+    Dispatches to appropriate driver based on app config.
+    Returns hashtable with Success, ExitCode, Action.
+#>
+function Install-AppWithDriver {
+    param(
+        [PSObject]$App,
+        [bool]$DryRun = $false,
+        [bool]$IsUpgrade = $false
+    )
+    
+    $driver = Get-AppDriver -App $App
+    
+    switch ($driver) {
+        'winget' {
+            $wingetId = Get-AppWingetId -App $App
+            if (-not $wingetId) {
+                return @{ Success = $false; ExitCode = 1; Error = 'no winget id'; Action = 'none' }
+            }
+            
+            if ($DryRun) {
+                $action = if ($IsUpgrade) { 'would upgrade' } else { 'would install' }
+                return @{ Success = $true; ExitCode = 0; Action = $action; DryRun = $true }
+            }
+            
+            try {
+                $action = if ($IsUpgrade) { 'upgrade' } else { 'install' }
+                
+                if ($script:WingetScript) {
+                    & pwsh -NoProfile -File $script:WingetScript $action --id $wingetId 2>&1 | Out-Null
+                } else {
+                    if ($IsUpgrade) {
+                        & winget upgrade --id $wingetId --accept-source-agreements --accept-package-agreements -e 2>&1 | Out-Null
+                    } else {
+                        & winget install --id $wingetId --accept-source-agreements --accept-package-agreements -e 2>&1 | Out-Null
+                    }
+                }
+                
+                $exitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+                return @{ Success = ($exitCode -eq 0); ExitCode = $exitCode; Action = $action }
+            } catch {
+                return @{ Success = $false; ExitCode = 1; Error = $_.ToString(); Action = 'failed' }
+            }
+        }
+        'custom' {
+            if ($IsUpgrade) {
+                # Custom driver doesn't support upgrade - report manual intervention needed
+                return @{ Success = $false; ExitCode = 1; Action = 'manual_upgrade_needed'; Error = 'custom driver does not support upgrade' }
+            }
+            return Install-CustomApp -App $App -DryRun $DryRun
+        }
+        default {
+            return @{ Success = $false; ExitCode = 1; Error = "unknown driver: $driver"; Action = 'none' }
+        }
+    }
+}
+
+#endregion Driver Abstraction (Bundle C)
 
 function Read-Manifest {
     param([string]$Path)
@@ -646,62 +1091,95 @@ function Invoke-VerifyCore {
     $manifest = Read-Manifest -Path $ManifestPath
     
     if (-not $manifest) {
-        return @{ Success = $false; ExitCode = 1; Error = "Failed to read manifest"; OkCount = 0; MissingCount = 0; MissingApps = @() }
+        return @{ Success = $false; ExitCode = 1; Error = "Failed to read manifest"; OkCount = 0; MissingCount = 0; MissingApps = @(); VersionMismatches = 0 }
     }
     
     $okCount = 0
     $missingCount = 0
+    $versionMismatchCount = 0
     $missingApps = @()
+    $versionMismatchApps = @()
     $appsObserved = @{}
     $timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
     
-    # Get installed apps map for drift detection
+    # Get installed apps map for drift detection (winget only)
     $installedAppsMap = Get-InstalledAppsMap
     
     foreach ($app in $manifest.apps) {
-        $wingetId = $app.refs.windows
-        if (-not $wingetId) {
+        $driver = Get-AppDriver -App $app
+        $appDisplayId = if ($driver -eq 'winget') { Get-AppWingetId -App $app } else { $app.id }
+        
+        if (-not $appDisplayId) {
             continue
         }
         
-        $isInstalled = Test-AppInstalled -WingetId $wingetId
+        # Use driver abstraction to check installation
+        $installStatus = Test-AppInstalledWithDriver -App $app
         
-        if ($isInstalled) {
-            Write-Host "  [OK] $wingetId" -ForegroundColor Green
-            $okCount++
+        if ($installStatus.Installed) {
+            # Check version constraint if present
+            $versionConstraint = Parse-VersionConstraint -Constraint $app.version
+            $versionSatisfied = $true
+            $versionCheckResult = $null
+            
+            if ($versionConstraint) {
+                $versionCheckResult = Test-VersionConstraint -InstalledVersion $installStatus.Version -Constraint $versionConstraint
+                $versionSatisfied = $versionCheckResult.Satisfied
+            }
+            
+            if ($versionSatisfied) {
+                Write-Host "  [OK] $appDisplayId (driver: $driver)" -ForegroundColor Green
+                $okCount++
+            } else {
+                Write-Host "  [VERSION] $appDisplayId - $($versionCheckResult.Reason)" -ForegroundColor Yellow
+                $versionMismatchCount++
+                $versionMismatchApps += @{
+                    id = $appDisplayId
+                    reason = $versionCheckResult.Reason
+                    installedVersion = $installStatus.Version
+                    constraint = $app.version
+                }
+            }
+            
             # Record observed app
-            $version = $installedAppsMap[$wingetId]
-            $appsObserved[$wingetId] = @{
+            $appsObserved[$appDisplayId] = @{
                 installed = $true
-                version = if ($version -and $version -ne $true) { $version } else { $null }
+                driver = $driver
+                version = $installStatus.Version
+                versionConstraint = $app.version
+                versionSatisfied = $versionSatisfied
                 lastSeenUtc = $timestampUtc
             }
         } else {
-            Write-Host "  [MISSING] $wingetId" -ForegroundColor Red
+            Write-Host "  [MISSING] $appDisplayId (driver: $driver)" -ForegroundColor Red
             $missingCount++
-            $missingApps += $wingetId
-            $appsObserved[$wingetId] = @{
+            $missingApps += $appDisplayId
+            $appsObserved[$appDisplayId] = @{
                 installed = $false
+                driver = $driver
                 version = $null
+                versionConstraint = $app.version
+                versionSatisfied = $false
                 lastSeenUtc = $timestampUtc
             }
         }
     }
     
-    # Compute drift (extras)
+    # Compute drift (extras) - only for winget apps currently
     $drift = Compute-Drift -ManifestPath $ManifestPath -InstalledAppsMap $installedAppsMap
     $extraCount = $drift.ExtraCount
     
     Write-Host ""
     Write-Host "[autosuite] Verify: Summary" -ForegroundColor Cyan
-    Write-Host "  Installed OK: $okCount" -ForegroundColor Green
-    Write-Host "  Missing:      $missingCount" -ForegroundColor $(if ($missingCount -gt 0) { "Red" } else { "Green" })
+    Write-Host "  Installed OK:       $okCount" -ForegroundColor Green
+    Write-Host "  Missing:            $missingCount" -ForegroundColor $(if ($missingCount -gt 0) { "Red" } else { "Green" })
+    Write-Host "  Version Mismatches: $versionMismatchCount" -ForegroundColor $(if ($versionMismatchCount -gt 0) { "Yellow" } else { "Green" })
     
     # Output summary via Write-Output for test capture
-    Write-Output "[autosuite] Verify: OkCount=$okCount MissingCount=$missingCount"
+    Write-Output "[autosuite] Verify: OkCount=$okCount MissingCount=$missingCount VersionMismatches=$versionMismatchCount ExtraCount=$extraCount"
     
     # Emit drift summary
-    Write-Output "[autosuite] Drift: Missing=$missingCount Extra=$extraCount VersionMismatches=0"
+    Write-Output "[autosuite] Drift: Missing=$missingCount Extra=$extraCount VersionMismatches=$versionMismatchCount"
     
     # Update state (unless skipped, e.g., during tests with no state dir)
     if (-not $SkipStateWrite) {
@@ -724,8 +1202,10 @@ function Invoke-VerifyCore {
             timestampUtc = $timestampUtc
             okCount = $okCount
             missingCount = $missingCount
+            versionMismatchCount = $versionMismatchCount
             missingApps = $missingApps
-            success = ($missingCount -eq 0)
+            versionMismatchApps = $versionMismatchApps
+            success = ($missingCount -eq 0 -and $versionMismatchCount -eq 0)
         }
         
         # Merge appsObserved
@@ -739,18 +1219,50 @@ function Invoke-VerifyCore {
         Write-AutosuiteStateAtomic -State $state | Out-Null
     }
     
+    # Determine overall success: missing OR version mismatch = failure
+    $overallSuccess = ($missingCount -eq 0 -and $versionMismatchCount -eq 0)
+    
     if ($missingCount -gt 0) {
         Write-Host ""
         Write-Host "Missing apps:" -ForegroundColor Yellow
         foreach ($app in $missingApps) {
             Write-Host "  - $app"
         }
+    }
+    
+    if ($versionMismatchCount -gt 0) {
+        Write-Host ""
+        Write-Host "Version mismatches:" -ForegroundColor Yellow
+        foreach ($mismatch in $versionMismatchApps) {
+            Write-Host "  - $($mismatch.id): $($mismatch.reason)"
+        }
+    }
+    
+    if (-not $overallSuccess) {
         Write-Output "[autosuite] Verify: FAILED"
-        return @{ Success = $false; ExitCode = 1; OkCount = $okCount; MissingCount = $missingCount; MissingApps = $missingApps; ExtraCount = $extraCount }
+        return @{ 
+            Success = $false
+            ExitCode = 1
+            OkCount = $okCount
+            MissingCount = $missingCount
+            VersionMismatches = $versionMismatchCount
+            MissingApps = $missingApps
+            VersionMismatchApps = $versionMismatchApps
+            ExtraCount = $extraCount
+        }
     }
     
     Write-Output "[autosuite] Verify: PASSED"
-    return @{ Success = $true; ExitCode = 0; OkCount = $okCount; MissingCount = $missingCount; MissingApps = @(); ExtraCount = $extraCount }
+    return @{ 
+        Success = $true
+        ExitCode = 0
+        OkCount = $okCount
+        MissingCount = $missingCount
+        VersionMismatches = $versionMismatchCount
+        MissingApps = @()
+        VersionMismatchApps = @()
+        ExtraCount = $extraCount
+    }
 }
 
 function Invoke-PlanCore {
@@ -860,6 +1372,11 @@ function Invoke-DoctorCore {
     # Check state
     $state = Read-AutosuiteState
     $hasState = $null -ne $state
+    $stateStatus = if ($hasState) { "present" } else { "absent" }
+    
+    # Compute drift counts for stable marker (default 0 if no manifest)
+    $driftMissing = 0
+    $driftExtra = 0
     
     Write-Host "State:" -ForegroundColor Yellow
     if ($hasState) {
@@ -912,11 +1429,16 @@ function Invoke-DoctorCore {
                 }
             }
             Write-Output "[autosuite] Drift: Missing=$($drift.MissingCount) Extra=$($drift.ExtraCount) VersionMismatches=0"
+            $driftMissing = $drift.MissingCount
+            $driftExtra = $drift.ExtraCount
         } else {
             Write-Host "  [ERROR] Could not compute drift: $($drift.Error)" -ForegroundColor Red
         }
         Write-Host ""
     }
+    
+    # Emit stable summary marker for tests
+    Write-Output "[autosuite] Doctor: state=$stateStatus driftMissing=$driftMissing driftExtra=$driftExtra"
     
     # Delegate to provisioning doctor for additional checks
     Write-Host "Provisioning Subsystem:" -ForegroundColor Yellow

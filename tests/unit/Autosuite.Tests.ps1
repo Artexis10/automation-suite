@@ -272,7 +272,9 @@ Describe "Autosuite Apply Command" {
             
             $output | Should -Contain "[autosuite] Apply: reading manifest $($script:TestManifestPath)"
             $output | Should -Contain "[autosuite] Apply: installing apps"
-            $output | Should -Contain "[autosuite] Apply: completed"
+            # New format includes ExitCode
+            $completedLine = $output | Where-Object { $_ -match '\[autosuite\] Apply: completed' }
+            $completedLine | Should -Not -BeNullOrEmpty
         }
     }
     
@@ -332,7 +334,9 @@ Describe "Autosuite Verify Command" {
             $output = Invoke-VerifyCore -ManifestPath $script:TestManifestPath 4>&1
             
             $output | Should -Contain "[autosuite] Verify: checking manifest $($script:TestManifestPath)"
-            $output | Should -Contain "[autosuite] Verify: OkCount=2 MissingCount=1"
+            # New format includes VersionMismatches and ExtraCount
+            $verifyLine = $output | Where-Object { $_ -match '\[autosuite\] Verify: OkCount=2 MissingCount=1' }
+            $verifyLine | Should -Not -BeNullOrEmpty
             $output | Should -Contain "[autosuite] Verify: FAILED"
         }
         
@@ -415,6 +419,25 @@ Describe "Autosuite Report and Doctor Commands" {
             $output = Invoke-DoctorCore 4>&1
             $output | Should -Contain "[autosuite] Doctor: checking environment..."
             $output | Should -Contain "[autosuite] Doctor: completed"
+        }
+        
+        It "Emits stable summary marker with state and drift counts" {
+            . $script:AutosuitePath -LoadFunctionsOnly
+            $script:ProvisioningCliPath = $script:MockCliPath
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-doctor-marker"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+            
+            # Ensure no state exists
+            if (Test-Path $script:AutosuiteStateDir) {
+                Remove-Item $script:AutosuiteStateDir -Recurse -Force
+            }
+            
+            $output = Invoke-DoctorCore 4>&1
+            $markerLine = $output | Where-Object { $_ -match '\[autosuite\] Doctor: state=' }
+            $markerLine | Should -Not -BeNullOrEmpty
+            $markerLine | Should -Match 'state=absent'
+            $markerLine | Should -Match 'driftMissing=\d+'
+            $markerLine | Should -Match 'driftExtra=\d+'
         }
     }
 }
@@ -714,3 +737,475 @@ Describe "Autosuite State Reset (Bundle B)" {
         }
     }
 }
+
+#region Bundle C Tests - Driver Abstraction + Version Constraints
+
+Describe "Bundle C: Version Constraint Parsing" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+    }
+    
+    Context "Parse-VersionConstraint" {
+        It "Returns null for empty constraint" {
+            $result = Parse-VersionConstraint -Constraint $null
+            $result | Should -BeNullOrEmpty
+            
+            $result = Parse-VersionConstraint -Constraint ""
+            $result | Should -BeNullOrEmpty
+        }
+        
+        It "Parses exact version constraint" {
+            $result = Parse-VersionConstraint -Constraint "1.2.3"
+            
+            $result.Type | Should -Be 'exact'
+            $result.Version | Should -Be '1.2.3'
+        }
+        
+        It "Parses minimum version constraint" {
+            $result = Parse-VersionConstraint -Constraint ">=2.40.0"
+            
+            $result.Type | Should -Be 'minimum'
+            $result.Version | Should -Be '2.40.0'
+        }
+        
+        It "Handles whitespace in constraint" {
+            $result = Parse-VersionConstraint -Constraint "  >= 1.0.0  "
+            
+            $result.Type | Should -Be 'minimum'
+            $result.Version | Should -Be '1.0.0'
+        }
+    }
+    
+    Context "Compare-Versions" {
+        It "Returns 0 for equal versions" {
+            $result = Compare-Versions -Version1 "1.2.3" -Version2 "1.2.3"
+            $result | Should -Be 0
+        }
+        
+        It "Returns -1 when first version is lower" {
+            $result = Compare-Versions -Version1 "1.2.3" -Version2 "1.2.4"
+            $result | Should -Be -1
+            
+            $result = Compare-Versions -Version1 "2.0.0" -Version2 "2.43.0"
+            $result | Should -Be -1
+        }
+        
+        It "Returns 1 when first version is higher" {
+            $result = Compare-Versions -Version1 "2.0.0" -Version2 "1.9.9"
+            $result | Should -Be 1
+            
+            $result = Compare-Versions -Version1 "23.01" -Version2 "22.99"
+            $result | Should -Be 1
+        }
+        
+        It "Handles different version lengths" {
+            $result = Compare-Versions -Version1 "1.2" -Version2 "1.2.0"
+            $result | Should -Be 0
+            
+            $result = Compare-Versions -Version1 "1.2.1" -Version2 "1.2"
+            $result | Should -Be 1
+        }
+        
+        It "Returns null for null inputs" {
+            $result = Compare-Versions -Version1 $null -Version2 "1.0.0"
+            $result | Should -BeNullOrEmpty
+        }
+    }
+    
+    Context "Test-VersionConstraint" {
+        It "Returns satisfied for no constraint" {
+            $result = Test-VersionConstraint -InstalledVersion "1.0.0" -Constraint $null
+            
+            $result.Satisfied | Should -Be $true
+            $result.Reason | Should -Be 'no constraint'
+        }
+        
+        It "Returns not satisfied for unknown version with constraint" {
+            $constraint = @{ Type = 'exact'; Version = '1.0.0' }
+            $result = Test-VersionConstraint -InstalledVersion $null -Constraint $constraint
+            
+            $result.Satisfied | Should -Be $false
+            $result.Reason | Should -Be 'version unknown'
+        }
+        
+        It "Exact constraint satisfied when versions match" {
+            $constraint = @{ Type = 'exact'; Version = '1.2.3' }
+            $result = Test-VersionConstraint -InstalledVersion "1.2.3" -Constraint $constraint
+            
+            $result.Satisfied | Should -Be $true
+        }
+        
+        It "Exact constraint not satisfied when versions differ" {
+            $constraint = @{ Type = 'exact'; Version = '1.2.3' }
+            $result = Test-VersionConstraint -InstalledVersion "1.2.4" -Constraint $constraint
+            
+            $result.Satisfied | Should -Be $false
+            $result.Reason | Should -Match 'expected 1.2.3'
+        }
+        
+        It "Minimum constraint satisfied when installed >= required" {
+            $constraint = @{ Type = 'minimum'; Version = '2.40.0' }
+            
+            $result = Test-VersionConstraint -InstalledVersion "2.43.0" -Constraint $constraint
+            $result.Satisfied | Should -Be $true
+            
+            $result = Test-VersionConstraint -InstalledVersion "2.40.0" -Constraint $constraint
+            $result.Satisfied | Should -Be $true
+        }
+        
+        It "Minimum constraint not satisfied when installed < required" {
+            $constraint = @{ Type = 'minimum'; Version = '2.40.0' }
+            $result = Test-VersionConstraint -InstalledVersion "2.39.0" -Constraint $constraint
+            
+            $result.Satisfied | Should -Be $false
+            $result.Reason | Should -Match '2.39.0 < 2.40.0'
+        }
+    }
+}
+
+Describe "Bundle C: Driver Abstraction" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+    }
+    
+    Context "Get-AppDriver" {
+        It "Returns winget as default driver" {
+            $app = [PSCustomObject]@{ id = "test"; refs = @{ windows = "Test.App" } }
+            $driver = Get-AppDriver -App $app
+            
+            $driver | Should -Be 'winget'
+        }
+        
+        It "Returns specified driver" {
+            $app = [PSCustomObject]@{ id = "test"; driver = "custom" }
+            $driver = Get-AppDriver -App $app
+            
+            $driver | Should -Be 'custom'
+        }
+        
+        It "Normalizes driver to lowercase" {
+            $app = [PSCustomObject]@{ id = "test"; driver = "CUSTOM" }
+            $driver = Get-AppDriver -App $app
+            
+            $driver | Should -Be 'custom'
+        }
+    }
+    
+    Context "Get-AppWingetId" {
+        It "Returns refs.windows when present" {
+            $app = [PSCustomObject]@{ id = "test"; refs = @{ windows = "Test.App" } }
+            $wingetId = Get-AppWingetId -App $app
+            
+            $wingetId | Should -Be 'Test.App'
+        }
+        
+        It "Returns null for custom driver without refs" {
+            $app = [PSCustomObject]@{ id = "test"; driver = "custom" }
+            $wingetId = Get-AppWingetId -App $app
+            
+            $wingetId | Should -BeNullOrEmpty
+        }
+    }
+}
+
+Describe "Bundle C: Custom Driver" {
+    
+    BeforeAll {
+        . $script:AutosuitePath -LoadFunctionsOnly
+        
+        # Create test fixtures directory
+        $script:CustomTestDir = Join-Path $script:TestDir "custom-driver-test"
+        New-Item -ItemType Directory -Path $script:CustomTestDir -Force | Out-Null
+        
+        # Create a mock install script inside repo (tests/fixtures simulated)
+        $script:MockInstallScript = Join-Path $script:CustomTestDir "mock-install.ps1"
+        Set-Content -Path $script:MockInstallScript -Value @'
+# Mock install script for testing
+Write-Output "Mock install executed"
+exit 0
+'@
+        
+        # Create a mock detect file
+        $script:MockDetectFile = Join-Path $script:CustomTestDir "detected-app.exe"
+        Set-Content -Path $script:MockDetectFile -Value "mock"
+    }
+    
+    AfterAll {
+        if ($script:CustomTestDir -and (Test-Path $script:CustomTestDir)) {
+            Remove-Item -Path $script:CustomTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Test-CustomScriptPathSafe" {
+        It "Accepts paths under repo root" {
+            $script:AutosuiteRoot = $script:AutosuiteRoot  # Ensure set
+            $safePath = "provisioning/installers/test.ps1"
+            
+            $result = Test-CustomScriptPathSafe -ScriptPath $safePath
+            $result | Should -Be $true
+        }
+        
+        It "Rejects path traversal attempts" {
+            $unsafePath = "../../../malicious.ps1"
+            
+            $result = Test-CustomScriptPathSafe -ScriptPath $unsafePath
+            $result | Should -Be $false
+        }
+        
+        It "Rejects absolute paths outside repo" {
+            $unsafePath = "C:\Windows\System32\malicious.ps1"
+            
+            $result = Test-CustomScriptPathSafe -ScriptPath $unsafePath
+            $result | Should -Be $false
+        }
+        
+        It "Rejects null or empty paths" {
+            $result = Test-CustomScriptPathSafe -ScriptPath $null
+            $result | Should -Be $false
+            
+            $result = Test-CustomScriptPathSafe -ScriptPath ""
+            $result | Should -Be $false
+        }
+    }
+    
+    Context "Test-CustomAppInstalled" {
+        It "Detects file exists" {
+            $customConfig = [PSCustomObject]@{
+                detect = [PSCustomObject]@{
+                    type = 'file'
+                    path = $script:MockDetectFile
+                }
+            }
+            
+            $result = Test-CustomAppInstalled -CustomConfig $customConfig
+            
+            $result.Installed | Should -Be $true
+        }
+        
+        It "Detects file not exists" {
+            $customConfig = [PSCustomObject]@{
+                detect = [PSCustomObject]@{
+                    type = 'file'
+                    path = "C:\NonExistent\Path\app.exe"
+                }
+            }
+            
+            $result = Test-CustomAppInstalled -CustomConfig $customConfig
+            
+            $result.Installed | Should -Be $false
+        }
+        
+        It "Returns error for missing detect config" {
+            $result = Test-CustomAppInstalled -CustomConfig $null
+            
+            $result.Installed | Should -Be $false
+            $result.Error | Should -Not -BeNullOrEmpty
+        }
+        
+        It "Returns error for unknown detect type" {
+            $customConfig = [PSCustomObject]@{
+                detect = [PSCustomObject]@{
+                    type = 'unknown'
+                }
+            }
+            
+            $result = Test-CustomAppInstalled -CustomConfig $customConfig
+            
+            $result.Installed | Should -Be $false
+            $result.Error | Should -Match 'unknown detect type'
+        }
+    }
+}
+
+Describe "Bundle C: Backward Compatibility" {
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:WingetScript = $script:MockWingetPath
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+    }
+    
+    Context "Old Manifests Without Driver Field" {
+        It "Treats apps without driver field as winget" {
+            # Old format manifest - no driver field
+            $app = [PSCustomObject]@{
+                id = "7zip-7zip"
+                refs = @{ windows = "7zip.7zip" }
+            }
+            
+            $driver = Get-AppDriver -App $app
+            $driver | Should -Be 'winget'
+        }
+        
+        It "Verify works with old manifest format" {
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-compat-test"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+            
+            # Use existing test manifest (old format)
+            $result = Invoke-VerifyCore -ManifestPath $script:AllInstalledManifestPath -SkipStateWrite
+            
+            $result.Success | Should -Be $true
+            $result.OkCount | Should -Be 2
+        }
+    }
+}
+
+Describe "Bundle C: Verify with Version Constraints" {
+    
+    BeforeAll {
+        $script:VersionTestDir = Join-Path $script:TestDir "version-test"
+        New-Item -ItemType Directory -Path $script:VersionTestDir -Force | Out-Null
+        
+        # Create manifest with version constraints
+        $script:VersionConstraintManifest = Join-Path $script:VersionTestDir "version-manifest.jsonc"
+        $manifestContent = @'
+{
+  "version": 1,
+  "name": "version-test",
+  "apps": [
+    { "id": "7zip", "refs": { "windows": "7zip.7zip" }, "version": ">=23.00" },
+    { "id": "git", "refs": { "windows": "Git.Git" }, "version": ">=2.40.0" }
+  ]
+}
+'@
+        Set-Content -Path $script:VersionConstraintManifest -Value $manifestContent
+        
+        # Create manifest with failing version constraint
+        $script:VersionFailManifest = Join-Path $script:VersionTestDir "version-fail.jsonc"
+        $failContent = @'
+{
+  "version": 1,
+  "name": "version-fail-test",
+  "apps": [
+    { "id": "7zip", "refs": { "windows": "7zip.7zip" }, "version": ">=99.0.0" }
+  ]
+}
+'@
+        Set-Content -Path $script:VersionFailManifest -Value $failContent
+    }
+    
+    AfterAll {
+        if ($script:VersionTestDir -and (Test-Path $script:VersionTestDir)) {
+            Remove-Item -Path $script:VersionTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:WingetScript = $script:MockWingetPath
+        $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-version-test"
+        $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+        if (Test-Path $script:AutosuiteStateDir) {
+            Remove-Item $script:AutosuiteStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Version Constraint Verification" {
+        It "Passes when installed versions satisfy constraints" {
+            # Mock winget returns 7zip 23.01 and Git 2.43.0
+            $result = Invoke-VerifyCore -ManifestPath $script:VersionConstraintManifest -SkipStateWrite
+            
+            $result.Success | Should -Be $true
+            $result.VersionMismatches | Should -Be 0
+        }
+        
+        It "Fails when installed version violates constraint" {
+            # Constraint requires >=99.0.0, but mock returns 23.01
+            $result = Invoke-VerifyCore -ManifestPath $script:VersionFailManifest -SkipStateWrite
+            
+            $result.Success | Should -Be $false
+            $result.VersionMismatches | Should -BeGreaterThan 0
+        }
+        
+        It "Emits version mismatch count in output" {
+            $output = Invoke-VerifyCore -ManifestPath $script:VersionFailManifest -SkipStateWrite 4>&1
+            
+            $verifyLine = $output | Where-Object { $_ -match '\[autosuite\] Verify:.*VersionMismatches=' }
+            $verifyLine | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+Describe "Bundle C: Apply with Version Constraints" {
+    
+    BeforeAll {
+        $script:ApplyVersionTestDir = Join-Path $script:TestDir "apply-version-test"
+        New-Item -ItemType Directory -Path $script:ApplyVersionTestDir -Force | Out-Null
+        
+        # Create manifest with version constraint that triggers upgrade
+        $script:UpgradeManifest = Join-Path $script:ApplyVersionTestDir "upgrade-manifest.jsonc"
+        $upgradeContent = @'
+{
+  "version": 1,
+  "name": "upgrade-test",
+  "apps": [
+    { "id": "7zip", "refs": { "windows": "7zip.7zip" }, "version": ">=99.0.0" }
+  ]
+}
+'@
+        Set-Content -Path $script:UpgradeManifest -Value $upgradeContent
+    }
+    
+    AfterAll {
+        if ($script:ApplyVersionTestDir -and (Test-Path $script:ApplyVersionTestDir)) {
+            Remove-Item -Path $script:ApplyVersionTestDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:WingetScript = $script:MockWingetPath
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+    }
+    
+    Context "Apply Decides Upgrade Path" {
+        It "Attempts upgrade when version constraint not satisfied (DryRun)" {
+            $result = Invoke-ApplyCore -ManifestPath $script:UpgradeManifest -IsDryRun $true -IsOnlyApps $true
+            
+            # Should report upgrade action in dry-run
+            $result.Upgraded | Should -BeGreaterThan 0
+        }
+    }
+}
+
+Describe "Bundle C: Drift with Version Mismatches" {
+    
+    BeforeEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $script:MockWingetPath
+        . $script:AutosuitePath -LoadFunctionsOnly
+        $script:WingetScript = $script:MockWingetPath
+    }
+    
+    AfterEach {
+        $env:AUTOSUITE_WINGET_SCRIPT = $null
+    }
+    
+    Context "Drift Summary Includes Version Mismatches" {
+        It "Drift output includes VersionMismatches count" {
+            $script:AutosuiteStateDir = Join-Path $script:TestDir ".autosuite-drift-version"
+            $script:AutosuiteStatePath = Join-Path $script:AutosuiteStateDir "state.json"
+            
+            $output = Invoke-VerifyCore -ManifestPath $script:TestManifestPath -SkipStateWrite 4>&1
+            
+            $driftLine = $output | Where-Object { $_ -match '\[autosuite\] Drift:.*VersionMismatches=' }
+            $driftLine | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+#endregion Bundle C Tests

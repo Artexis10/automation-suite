@@ -55,6 +55,9 @@ test-results.xml
 # Machine-specific captures (not committed)
 provisioning/manifests/local/
 
+# Autosuite state directory (local machine state, not committed)
+.autosuite/
+
 # Output files (keep structure, not content)
 outputs/*.pdf
 outputs/*.docx

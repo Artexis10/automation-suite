@@ -505,6 +505,92 @@ The following are planned but not yet functional:
 
 ---
 
+
+---
+
+## Bundle C — Drivers + Version Constraints
+
+Bundle C introduces driver abstraction and version constraints for flexible app management.
+
+### New Manifest Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `apps[*].driver` | string | `"winget"` | Driver to use: `winget` or `custom` |
+| `apps[*].version` | string | (none) | Version constraint: exact `"1.2.3"` or minimum `">=1.2.3"` |
+| `apps[*].custom` | object | (none) | Custom driver configuration (required when `driver: "custom"`) |
+| `apps[*].custom.installScript` | string | - | Relative path to install script (must be under repo root) |
+| `apps[*].custom.detect` | object | - | Detection configuration |
+| `apps[*].custom.detect.type` | string | - | Detection type: `file` or `registry` |
+| `apps[*].custom.detect.path` | string | - | For `file` type: path to check (supports env vars) |
+| `apps[*].custom.detect.key` | string | - | For `registry` type: registry key path |
+| `apps[*].custom.detect.value` | string | - | For `registry` type: value name to check |
+
+### Example: Winget App with Version Constraint
+
+```jsonc
+{
+  "id": "git-git",
+  "refs": { "windows": "Git.Git" },
+  "version": ">=2.40.0"
+}
+```
+
+### Example: Custom Driver App
+
+```jsonc
+{
+  "id": "mytool",
+  "driver": "custom",
+  "custom": {
+    "installScript": "provisioning/installers/mytool.ps1",
+    "detect": {
+      "type": "file",
+      "path": "C:\\Program Files\\MyTool\\mytool.exe"
+    }
+  }
+}
+```
+
+### Version Constraint Behavior
+
+| Constraint | Example | Behavior |
+|------------|---------|----------|
+| Exact | `"1.2.3"` | Installed version must equal `1.2.3` |
+| Minimum | `">=1.2.3"` | Installed version must be `>= 1.2.3` |
+| None | (omit field) | Any version satisfies |
+
+**Verify behavior:**
+- Missing app → FAIL
+- Version unknown + constraint present → FAIL (CI-safe default)
+- Version violates constraint → FAIL (reported as version mismatch)
+
+**Apply behavior:**
+- Missing → install
+- Version mismatch (winget) → attempt upgrade
+- Version mismatch (custom) → report "manual intervention needed"
+
+### Custom Driver Security
+
+- Install scripts **must** be under the repository root
+- Path traversal attempts (e.g., `../../../malicious.ps1`) are rejected
+- Scripts are invoked via `pwsh -NoProfile -File <script>`
+
+### Stable Output Markers
+
+```
+[autosuite] Verify: OkCount=N MissingCount=N VersionMismatches=N ExtraCount=N
+[autosuite] Drift: Missing=N Extra=N VersionMismatches=N
+[autosuite] Apply: completed ExitCode=N
+[autosuite] Doctor: state=<present|absent> driftMissing=N driftExtra=N
+```
+
+### Backward Compatibility
+
+- Manifests without `driver` field default to `winget`
+- Manifests without `version` field skip version checking
+- Existing `refs.windows` format continues to work
+
 ## References
 
 - [provisioning/readme.md](../provisioning/readme.md) - Full provisioning architecture
