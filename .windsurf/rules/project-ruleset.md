@@ -184,6 +184,23 @@ cd provisioning
 
 # Apply with restore enabled (installs apps + restores configs)
 .\cli.ps1 -Command apply -Manifest .\manifests\my-machine.jsonc -EnableRestore
+# Show most recent run report (default)
+.\cli.ps1 -Command report
+
+# Show most recent run report (explicit)
+.\cli.ps1 -Command report -Latest
+
+# Show specific run by ID
+.\cli.ps1 -Command report -RunId 20251219-013701
+
+# Show last 5 runs (compact list)
+.\cli.ps1 -Command report -Last 5
+
+# Output report as JSON (machine-readable)
+.\cli.ps1 -Command report -Json
+
+# Show specific run as JSON
+.\cli.ps1 -Command report -RunId 20251219-013701 -Json
 ```
 
 ### Capture Command Options
@@ -202,6 +219,15 @@ cd provisioning
 | `-Update` | false | Merge new capture into existing manifest instead of overwriting |
 | `-PruneMissingApps` | false | With -Update, remove apps no longer present (root manifest only, never includes) |
 | `-Plan` | - | Path to pre-generated plan file; mutually exclusive with -Manifest (apply command only) |
+
+### Report Command Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-Latest` | true | Show most recent run (default behavior) |
+| `-RunId <id>` | - | Show specific run by ID (mutually exclusive with -Latest/-Last) |
+| `-Last <n>` | - | Show N most recent runs in compact list format |
+| `-Json` | false | Output as machine-readable JSON (no color formatting) |
 
 ### Running Tests
 
@@ -226,6 +252,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-P
 
 # Run apply-from-plan tests
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\ApplyFromPlan.Tests.ps1"
+
+# Run report command tests
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Report.Tests.ps1"
 ```
 
 ### Other Scripts
@@ -404,7 +433,6 @@ The following are planned but not yet functional:
 
 - **apt/dnf/brew drivers** - Linux/macOS package managers
 - **Verifier modules** - Custom verification beyond file-exists
-- **Report command** - `cli.ps1 -Command report` (shows run history)
 - **Reboot handling** - Automatic reboot detection and `--reboot-if-needed`
 - **Rollback** - Undo last apply using backup state
 
@@ -416,3 +444,5 @@ The following are planned but not yet functional:
 - [contributing.md](../contributing.md) - Development conventions
 - [roadmap.md](../roadmap.md) - Future development plans
 - [tool-index.md](../tool-index.md) - Complete script index
+
+
