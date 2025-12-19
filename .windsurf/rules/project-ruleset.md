@@ -398,6 +398,40 @@ If any of the following change, update this ruleset in the same commit:
 - CLI must warn user at end of run if reboot required
 - Planned: `--reboot-if-needed` flag (not implemented yet)
 
+
+## Documentation Naming Conventions
+
+To ensure consistency, clarity, and cross-platform safety, Automation Suite enforces the following Markdown filename conventions:
+
+### Canonical Documents (UPPERCASE)
+
+Project-level, canonical entry-point documents MUST use uppercase filenames:
+
+- README.md
+- VISION.md
+- CONTRIBUTING.md
+- LICENSE
+- SECURITY.md
+- CHANGELOG.md
+
+These files define project intent, governance, or orientation and are treated as authoritative.
+
+### Supporting Documentation (lowercase)
+
+All non-canonical documentation MUST use lowercase filenames, including:
+
+- docs/**/*.md
+- tool-specific documentation
+- conceptual, lifecycle, or reference materials
+
+Lowercase filenames are preferred for ease of linking, URL compatibility, and reduced filesystem friction.
+
+### General Rules
+
+- Do NOT mix casing styles (e.g. Readme.md, Vision.md)
+- Do NOT rename files back and forth purely for casing
+- Consistency takes precedence over personal preference
+
 ---
 
 ## Manifest Format (v1)

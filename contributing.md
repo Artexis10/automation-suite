@@ -128,6 +128,10 @@ param(
 | Documentation | `UPPERCASE.md` or `Title Case.md` | `README.md`, `USAGE_GUIDE.md` |
 | Config files | `lowercase` | `.gitignore`, `urls.txt` |
 
+## Documentation Conventions
+
+Canonical project documents (README.md, CONTRIBUTING.md, etc.) use UPPERCASE filenames. All supporting documentation uses lowercase filenames. See `.windsurf/rules/project-ruleset.md` for the authoritative naming convention rules.
+
 ### Folder Naming
 
 - Use lowercase kebab-case for all directories: `backup-tools`, `media-tools`
