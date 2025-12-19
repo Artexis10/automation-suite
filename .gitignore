@@ -46,6 +46,9 @@ temp/
 *.tmp
 *~
 
+# Vendored tools (auto-installed by scripts)
+tools/pester/
+
 # Output files (keep structure, not content)
 outputs/*.pdf
 outputs/*.docx

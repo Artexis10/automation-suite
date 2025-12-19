@@ -35,6 +35,9 @@ automation-suite/
 │   └── live-chat-downloader/
 ├── archive-setup/          # Environment and archive setup scripts
 │   └── Setup-ArchiveStructure.ps1
+├── autosuite.ps1           # Root orchestrator CLI (primary entrypoint)
+├── tests/                  # Root-level Pester tests
+│   └── unit/
 ├── provisioning/           # Machine provisioning and configuration management
 │   ├── cli.ps1
 │   ├── drivers/
@@ -51,9 +54,44 @@ automation-suite/
 
 ---
 
-## Quick Start
+## Quickstart
 
-### Prerequisites
+### Autosuite CLI (Primary Entrypoint)
+
+```powershell
+# Apply a profile (installs apps, optionally restores configs)
+.\autosuite.ps1 apply -Profile hugo-win11
+
+# Preview what would be applied (dry-run)
+.\autosuite.ps1 apply -Profile hugo-win11 -DryRun
+
+# Apply with config restoration enabled
+.\autosuite.ps1 apply -Profile hugo-win11 -EnableRestore
+
+# Capture current machine state to a profile
+.\autosuite.ps1 capture -Profile hugo-win11
+
+# Generate execution plan from profile
+.\autosuite.ps1 plan -Profile hugo-win11
+
+# Verify current state matches profile
+.\autosuite.ps1 verify -Profile hugo-win11
+
+# Show most recent provisioning run
+.\autosuite.ps1 report -Latest
+
+# Show last 5 runs
+.\autosuite.ps1 report -Last 5
+
+# Diagnose environment issues
+.\autosuite.ps1 doctor
+```
+
+Use `-Manifest <path>` instead of `-Profile` to specify a manifest file directly.
+
+---
+
+## Prerequisites
 
 | Requirement | Version | Purpose |
 |-------------|---------|---------|

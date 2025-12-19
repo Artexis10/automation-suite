@@ -26,6 +26,9 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ```
 automation-suite/
+├── autosuite.ps1           # Root orchestrator CLI (primary entrypoint)
+├── tests/                  # Root-level Pester tests
+│   └── unit/
 ├── backup-tools/           # File backup and integrity verification
 ├── media-tools/            # Photo/video processing utilities
 ├── podcast-tools/          # Podcast production helpers
@@ -54,6 +57,7 @@ automation-suite/
 
 | Subsystem | Status | Location |
 |-----------|--------|----------|
+| Autosuite Root Orchestrator | Functional | `autosuite.ps1` |
 | Provisioning CLI | Functional | `provisioning/cli.ps1` |
 | Manifest parsing (JSONC/JSON/YAML) | Functional | `provisioning/engine/manifest.ps1` |
 | Plan generation | Functional | `provisioning/engine/plan.ps1` |
@@ -112,6 +116,45 @@ Every meaningful action must be verifiable. "It ran" is not success—success me
 ---
 
 ## How to Run
+
+### Autosuite Commands (Primary Entrypoint)
+
+`powershell
+# Apply a profile (installs apps, optionally restores configs)
+.\autosuite.ps1 apply -Profile hugo-win11
+
+# Preview what would be applied (dry-run)
+.\autosuite.ps1 apply -Profile hugo-win11 -DryRun
+
+# Apply with config restoration enabled
+.\autosuite.ps1 apply -Profile hugo-win11 -EnableRestore
+
+# Capture current machine state to a profile
+.\autosuite.ps1 capture -Profile hugo-win11
+
+# Generate execution plan from profile
+.\autosuite.ps1 plan -Profile hugo-win11
+
+# Verify current state matches profile
+.\autosuite.ps1 verify -Profile hugo-win11
+
+# Show most recent provisioning run
+.\autosuite.ps1 report -Latest
+
+# Show last 5 runs
+.\autosuite.ps1 report -Last 5
+
+# Show specific run by ID
+.\autosuite.ps1 report -RunId 20251219-010000
+
+# Output report as JSON
+.\autosuite.ps1 report -Json
+
+# Diagnose environment issues
+.\autosuite.ps1 doctor
+`
+
+Use `-Manifest <path>` instead of `-Profile` to specify a manifest file directly.
 
 ### Provisioning Commands
 
@@ -231,30 +274,37 @@ cd provisioning
 
 ### Running Tests
 
+The test runner bootstraps Pester 5.5.0+ automatically via `scripts/ensure-pester.ps1`.
+Tests are written for Pester 5.x and use features like `BeforeAll`, `AfterAll`, and `Should -Be`.
+
 ```powershell
-# From repo root - run all Pester tests
+# From repo root - run all Pester tests (recommended)
+# Bootstraps Pester 5.5.0+ and runs all tests with proper exit codes
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1
 
+# Run autosuite tests only
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path tests\unit
+
 # Run provisioning tests only
-pwsh -NoProfile -ExecutionPolicy Bypass -File provisioning\tests\run-tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path provisioning\tests
 
 # Run specific test file
-pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Plan.Tests.ps1"
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path tests\unit\Autosuite.Tests.ps1
+```
 
-# Run capture tests
-pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Capture.Tests.ps1"
+### Test Environment Variables
 
-# Run discovery tests
-pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Discovery.Tests.ps1"
+| Variable | Description |
+|----------|-------------|
+| `AUTOSUITE_PROVISIONING_CLI` | Override path to provisioning CLI for testing. Used by autosuite tests to inject a mock CLI. |
 
-# Run update capture tests
-pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\UpdateCapture.Tests.ps1"
+### Test Infrastructure
 
-# Run apply-from-plan tests
-pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\ApplyFromPlan.Tests.ps1"
-
-# Run report command tests
-pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester; Invoke-Pester -Path provisioning\tests\unit\Report.Tests.ps1"
+| File | Purpose |
+|------|---------|
+| `scripts/ensure-pester.ps1` | Bootstraps Pester 5.5.0+ (prefers `tools/pester/` vendor, falls back to CurrentUser install) |
+| `scripts/test_pester.ps1` | Main test runner - calls ensure-pester, runs Invoke-Pester, exits non-zero on failures |
+| `tools/pester/` | Vendored Pester module (gitignored, auto-created by ensure-pester.ps1) |
 ```
 
 ### Other Scripts
