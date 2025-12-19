@@ -132,7 +132,8 @@ Describe "Autosuite Root Orchestrator" {
             $output = pwsh -NoProfile -Command "& '$($script:AutosuitePath)'" 2>&1
             $outputStr = $output -join "`n"
             $outputStr | Should -Match "Automation Suite"
-            $outputStr | Should -Match "v0"
+            # Accept both release versions (vX.Y.Z) and dev versions (0.0.0-dev+sha)
+            $outputStr | Should -Match "(v\d+\.\d+\.\d+|0\.0\.0-dev)"
         }
         
         It "Shows help when no command provided" {
