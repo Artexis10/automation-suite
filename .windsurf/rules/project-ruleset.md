@@ -118,6 +118,7 @@ Every meaningful action must be verifiable. "It ran" is not success—success me
 ---
 
 
+
 ## Bootstrap Installation
 
 Autosuite can be installed to your user PATH for convenient access from any directory.
@@ -127,6 +128,9 @@ Autosuite can be installed to your user PATH for convenient access from any dire
 ```powershell
 # Install autosuite command to user PATH (idempotent)
 .\autosuite.ps1 bootstrap
+
+# Install with explicit repo root path
+.\autosuite.ps1 bootstrap -RepoRoot C:\Users\hugoa\Desktop\Projects\automation-suite
 ```
 
 This command:
@@ -134,12 +138,37 @@ This command:
 - Installs the CLI entrypoint (`autosuite.ps1`) to that directory
 - Creates `autosuite.cmd` shim that forwards all arguments to PowerShell
 - Adds the bin directory to user PATH if not already present
+- **Persists repo root path** to `%LOCALAPPDATA%\Autosuite\repo-root.txt` for profile resolution
+- Auto-detects repo root if `-RepoRoot` not provided (searches for `.git` or `provisioning\manifests`)
 - Is fully idempotent (safe to run multiple times)
 
 After bootstrap completes, you can run `autosuite --help` from any directory.
 
 **Note:** You may need to restart your terminal for PATH changes to take effect.
 
+### Repo Root Configuration
+
+The repo root is used to resolve `-Profile` arguments to manifest paths. Priority order:
+
+1. **`$env:AUTOSUITE_ROOT`** - Environment variable override (highest priority)
+2. **`%LOCALAPPDATA%\Autosuite\repo-root.txt`** - Persisted during bootstrap
+3. **`$PSScriptRoot`** - Fallback when running from repo directory
+
+If repo root is not configured, profile resolution will fail with a helpful error message.
+
+**Examples:**
+
+```powershell
+# Set environment variable (session-specific)
+$env:AUTOSUITE_ROOT = "C:\Users\hugoa\Desktop\Projects\automation-suite"
+
+# Or bootstrap with explicit path (persisted)
+autosuite bootstrap -RepoRoot C:\Users\hugoa\Desktop\Projects\automation-suite
+
+# Then use profiles from anywhere
+autosuite apply -Profile hugo-win11
+autosuite verify -Profile hugo-win11
+```
 ---
 ## How to Run
 
@@ -849,5 +878,6 @@ $output = & .\autosuite.ps1 verify -Manifest foo.jsonc 6>&1
 | `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
 | `provisioning/manifests/examples/` | Sanitized shareable examples | **Committed** |
 | `provisioning/manifests/fixture-test.jsonc` | Deterministic test fixture | **Committed** |
+
 
 

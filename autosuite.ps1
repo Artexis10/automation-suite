@@ -122,7 +122,11 @@ param(
 
     # State import: replace mode
     [Parameter(Mandatory = $false)]
-    [switch]$Replace
+    [switch]$Replace,
+
+    # Bootstrap: repo root path
+    [Parameter(Mandatory = $false)]
+    [string]$RepoRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -380,6 +384,121 @@ function Compute-Drift {
 
 #region PATH Installation
 
+function Get-RepoRootPath {
+    <#
+    .SYNOPSIS
+        Get the repo root path from environment variable or persisted file.
+    .DESCRIPTION
+        Priority:
+        1. $env:AUTOSUITE_ROOT (if set)
+        2. %LOCALAPPDATA%\Autosuite\repo-root.txt (if exists)
+        3. $null (not configured)
+    #>
+    
+    # Priority 1: Environment variable override
+    if ($env:AUTOSUITE_ROOT) {
+        if (Test-Path $env:AUTOSUITE_ROOT) {
+            return $env:AUTOSUITE_ROOT
+        } else {
+            Write-Warning "AUTOSUITE_ROOT is set but path does not exist: $env:AUTOSUITE_ROOT"
+        }
+    }
+    
+    # Priority 2: Persisted repo-root.txt
+    $repoRootFile = Join-Path $env:LOCALAPPDATA "Autosuite\repo-root.txt"
+    if (Test-Path $repoRootFile) {
+        try {
+            $persistedRoot = (Get-Content -Path $repoRootFile -Raw -ErrorAction Stop).Trim()
+            if ($persistedRoot -and (Test-Path $persistedRoot)) {
+                return $persistedRoot
+            }
+        } catch {
+            Write-Warning "Failed to read repo-root.txt: $_"
+        }
+    }
+    
+    return $null
+}
+
+function Find-RepoRoot {
+    <#
+    .SYNOPSIS
+        Detect repo root by walking up from current directory.
+    .DESCRIPTION
+        Searches for:
+        1. Current directory if it contains provisioning\manifests
+        2. Parent directories until finding .git or provisioning\manifests
+        Returns $null if not found.
+    #>
+    param(
+        [string]$StartPath = (Get-Location).Path
+    )
+    
+    $currentPath = $StartPath
+    
+    # Check if current directory contains provisioning\manifests
+    $manifestsPath = Join-Path $currentPath "provisioning\manifests"
+    if (Test-Path $manifestsPath) {
+        return $currentPath
+    }
+    
+    # Walk up parent directories
+    while ($currentPath) {
+        # Check for .git directory
+        $gitPath = Join-Path $currentPath ".git"
+        if (Test-Path $gitPath) {
+            # Verify it also has provisioning\manifests
+            $manifestsPath = Join-Path $currentPath "provisioning\manifests"
+            if (Test-Path $manifestsPath) {
+                return $currentPath
+            }
+        }
+        
+        # Check for provisioning\manifests directly
+        $manifestsPath = Join-Path $currentPath "provisioning\manifests"
+        if (Test-Path $manifestsPath) {
+            return $currentPath
+        }
+        
+        # Move to parent
+        $parent = Split-Path -Parent $currentPath
+        if ($parent -eq $currentPath) {
+            # Reached root of filesystem
+            break
+        }
+        $currentPath = $parent
+    }
+    
+    return $null
+}
+
+function Set-RepoRootPath {
+    <#
+    .SYNOPSIS
+        Persist repo root path to %LOCALAPPDATA%\Autosuite\repo-root.txt
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    
+    $repoRootFile = Join-Path $env:LOCALAPPDATA "Autosuite\repo-root.txt"
+    
+    # Ensure directory exists
+    $parentDir = Split-Path -Parent $repoRootFile
+    if (-not (Test-Path $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    }
+    
+    try {
+        Set-Content -Path $repoRootFile -Value $Path -Encoding UTF8 -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Host "[ERROR] Failed to write repo-root.txt: $_" -ForegroundColor Red
+        return $false
+    }
+}
+
 function Install-AutosuiteToPath {
     <#
     .SYNOPSIS
@@ -387,8 +506,15 @@ function Install-AutosuiteToPath {
     .DESCRIPTION
         Creates %LOCALAPPDATA%\Autosuite\bin directory, installs CLI entrypoint,
         creates CMD shim, and adds to user PATH if not already present.
+        Optionally persists repo root path for profile resolution.
         Fully idempotent - safe to run multiple times.
+    .PARAMETER RepoRootPath
+        Optional explicit repo root path. If not provided, attempts auto-detection.
     #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$RepoRootPath
+    )
     
     $binDir = Join-Path $env:LOCALAPPDATA "Autosuite\bin"
     $cliEntrypoint = Join-Path $binDir "autosuite.ps1"
@@ -457,13 +583,56 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Autosuite\bin\auto
         Write-Host "[INFO] PATH updated. You may need to restart your terminal for changes to take effect." -ForegroundColor Cyan
     }
     
+    # Handle repo root persistence
+    $repoRootConfigured = $false
+    $repoRootPath = $null
+    
+    if ($RepoRootPath) {
+        # Explicit -RepoRoot provided
+        if (Test-Path $RepoRootPath) {
+            $manifestsPath = Join-Path $RepoRootPath "provisioning\manifests"
+            if (Test-Path $manifestsPath) {
+                Write-Host "[REPO-ROOT] Using provided path: $RepoRootPath" -ForegroundColor Green
+                if (Set-RepoRootPath -Path $RepoRootPath) {
+                    $repoRootConfigured = $true
+                    $repoRootPath = $RepoRootPath
+                }
+            } else {
+                Write-Host "[WARN] Provided repo root does not contain provisioning\manifests: $RepoRootPath" -ForegroundColor Yellow
+                Write-Host "       Profile resolution may not work correctly." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "[WARN] Provided repo root path does not exist: $RepoRootPath" -ForegroundColor Yellow
+        }
+    } else {
+        # Auto-detect repo root
+        $detectedRoot = Find-RepoRoot
+        if ($detectedRoot) {
+            Write-Host "[REPO-ROOT] Auto-detected: $detectedRoot" -ForegroundColor Green
+            if (Set-RepoRootPath -Path $detectedRoot) {
+                $repoRootConfigured = $true
+                $repoRootPath = $detectedRoot
+            }
+        } else {
+            Write-Host "[WARN] Could not auto-detect repo root." -ForegroundColor Yellow
+            Write-Host "       To enable profile resolution, run:" -ForegroundColor Yellow
+            Write-Host "       autosuite bootstrap -RepoRoot <path-to-automation-suite>" -ForegroundColor Cyan
+            Write-Host "       Or set environment variable: `$env:AUTOSUITE_ROOT" -ForegroundColor Cyan
+        }
+    }
+    
     Write-Host ""
     Write-Host "[SUCCESS] Bootstrap complete!" -ForegroundColor Green
     Write-Host ""
     Write-Host "You can now run 'autosuite --help' from any directory." -ForegroundColor Cyan
+    
+    if ($repoRootConfigured) {
+        Write-Host "Profile resolution configured for: $repoRootPath" -ForegroundColor Cyan
+    }
+    
     Write-Host ""
     
-    return @{ Success = $true; ExitCode = 0; BinDir = $binDir }
+    return @{ Success = $true; ExitCode = 0; BinDir = $binDir; RepoRootConfigured = $repoRootConfigured; RepoRoot = $repoRootPath }
 }
 
 #endregion PATH Installation
@@ -534,9 +703,33 @@ function Show-Help {
 }
 
 function Resolve-ManifestPath {
+    <#
+    .SYNOPSIS
+        Resolve profile name to manifest path using repo root.
+    .DESCRIPTION
+        Uses repo root from:
+        1. $env:AUTOSUITE_ROOT (if set)
+        2. Persisted repo-root.txt
+        3. $script:AutosuiteRoot (fallback for in-repo execution)
+    #>
     param([string]$ProfileName)
     
-    $manifestPath = Join-Path $script:AutosuiteRoot "provisioning\manifests\$ProfileName.jsonc"
+    # Try to get configured repo root
+    $repoRoot = Get-RepoRootPath
+    
+    if (-not $repoRoot) {
+        # Fallback: if running from repo, use $PSScriptRoot
+        $repoRoot = $script:AutosuiteRoot
+        
+        # Verify this is actually a repo root
+        $manifestsDir = Join-Path $repoRoot "provisioning\manifests"
+        if (-not (Test-Path $manifestsDir)) {
+            Write-Host "[ERROR] Repo root not configured. Run 'autosuite bootstrap -RepoRoot <path>' or set AUTOSUITE_ROOT." -ForegroundColor Red
+            return $null
+        }
+    }
+    
+    $manifestPath = Join-Path $repoRoot "provisioning\manifests\$ProfileName.jsonc"
     return $manifestPath
 }
 
@@ -2223,7 +2416,12 @@ $exitCode = 0
 switch ($Command) {
     "bootstrap" {
         Write-Information "[autosuite] Bootstrap: installing to PATH..." -InformationAction Continue
-        $result = Install-AutosuiteToPath
+        $result = Install-AutosuiteToPath -RepoRootPath $RepoRoot
+        if ($result.RepoRootConfigured) {
+            Write-Information "[autosuite] Bootstrap: repo root configured: $($result.RepoRoot)" -InformationAction Continue
+        } else {
+            Write-Information "[autosuite] Bootstrap: repo root not configured (profile resolution may not work)" -InformationAction Continue
+        }
         Write-Information "[autosuite] Bootstrap: completed ExitCode=$($result.ExitCode)" -InformationAction Continue
         $exitCode = $result.ExitCode
     }
