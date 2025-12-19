@@ -6,6 +6,8 @@ A unified collection of automation scripts for backup workflows, media processin
 **Primary Language:** PowerShell  
 **Status:** Active Development
 
+[![CI](https://github.com/Artexis10/automation-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/Artexis10/automation-suite/actions/workflows/ci.yml)
+
 ---
 
 ## Overview
@@ -56,36 +58,115 @@ automation-suite/
 
 ## Quickstart
 
-### Capture → Apply → Verify Loop
+### A) Canonical Commands
 
 ```powershell
-# 1. CAPTURE: Export current machine state to local manifest (gitignored)
-.\autosuite.ps1 capture
-# Output: provisioning/manifests/local/<machine>.jsonc
+# CAPTURE: Local machine state (gitignored)
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\autosuite.ps1 capture
 
-# Capture to specific path
-.\autosuite.ps1 capture -Out my-manifest.jsonc
+# CAPTURE: Sanitized example (committed to examples/)
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\autosuite.ps1 capture -Sanitize -Name example-windows-core
 
-# Generate sanitized example manifest (no machine/timestamps, stable sort)
-.\autosuite.ps1 capture -Sanitize -Name example-windows-core
-# Output: provisioning/manifests/examples/example-windows-core.jsonc
+# APPLY: Dry-run preview
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\autosuite.ps1 apply -Manifest provisioning/manifests/examples/example-windows-core.jsonc -DryRun
 
-# Legacy: Generate static example manifest
-.\autosuite.ps1 capture -Example
+# VERIFY: Check apps installed
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\autosuite.ps1 verify -Manifest provisioning/manifests/examples/example-windows-core.jsonc
 
-# 2. APPLY: Install apps from manifest
-.\autosuite.ps1 apply -Manifest provisioning/manifests/fixture-test.jsonc
+# REPORT: Show state summary
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\autosuite.ps1 report -Manifest provisioning/manifests/examples/example-windows-core.jsonc
 
-# Preview what would be installed (dry-run)
-.\autosuite.ps1 apply -Manifest manifest.jsonc -DryRun
-
-# Install apps only (skip auto-verify at end)
-.\autosuite.ps1 apply -Manifest manifest.jsonc -OnlyApps
-
-# 3. VERIFY: Check all apps are installed
-.\autosuite.ps1 verify -Manifest provisioning/manifests/fixture-test.jsonc
-# Exit code: 0 = all installed, 1 = missing apps
+# STATE RESET: Clear local state
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\autosuite.ps1 state reset
 ```
+
+### B) Manifest Locations Policy
+
+| Path | Purpose | Git Status |
+|------|---------|------------|
+| `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
+| `provisioning/manifests/examples/` | Sanitized shareable examples | **Committed** |
+| `provisioning/manifests/fixture-test.jsonc` | Deterministic test fixture | **Committed** |
+| `.autosuite/state.json` | Local machine state | **Gitignored** |
+
+### C) Output Stream Hygiene
+
+Stable wrapper lines are emitted via **Information stream (6)** using `Write-Information -InformationAction Continue`.
+
+**To capture in automation/tests:**
+
+```powershell
+$output = & .\autosuite.ps1 verify -Manifest foo.jsonc 6>&1
+$outputStr = $output -join "`n"
+$outputStr | Should -Match "\[autosuite\] Verify: PASSED"
+```
+
+**Stream usage:**
+- **Information (6)** — Stable wrapper lines for automation/testing
+- **Success (1)** — Structured return objects from Core functions
+- **Host** — Cosmetic UI only (colors, formatting); not captured
+
+### D) State + Drift
+
+Autosuite tracks state in `.autosuite/state.json` (repo-local, gitignored):
+
+- **lastApplied** — Manifest path, hash, and timestamp of last `apply`
+- **lastVerify** — Manifest path, hash, timestamp, and results of last `verify`
+- **appsObserved** — Map of winget IDs to installed status and version
+
+**Drift detection** compares current installed apps against a manifest:
+- **Missing** — Apps required by manifest but not installed
+- **Extra** — Apps installed but not in manifest
+- **VersionMismatches** — Apps with version constraint violations
+
+The `verify` command emits a drift summary line:
+```
+[autosuite] Drift: Missing=<n> Extra=<n> VersionMismatches=<n>
+```
+
+### E) Drivers + Version Constraints (MVP)
+
+**Backward compatible:** Default driver is `winget` when omitted.
+
+**Version constraints:**
+| Constraint | Example | Behavior |
+|------------|---------|----------|
+| Exact | `"1.2.3"` | Installed version must equal `1.2.3` |
+| Minimum | `">=1.2.3"` | Installed version must be `>= 1.2.3` |
+| None | (omit field) | Any version satisfies |
+
+**Unknown version + constraint:** Fails verification (CI-safe default).
+
+**Custom driver format:**
+```jsonc
+{
+  "id": "mytool",
+  "driver": "custom",
+  "custom": {
+    "installScript": "provisioning/installers/mytool.ps1",
+    "detect": { "type": "file", "path": "C:\\Program Files\\MyTool\\mytool.exe" }
+  }
+}
+```
+
+**Detect types supported:** `file`, `registry`
+
+**Security:** Custom install scripts must be under repo root; path traversal is blocked.
+
+### F) CI
+
+GitHub Actions runs **hermetic unit tests** on:
+- Pull requests targeting `main`
+- Pushes to `main`
+
+**Docs-only changes do NOT trigger CI** (via `paths-ignore` for `**/*.md` and `docs/**`).
+
+CI command:
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test_pester.ps1 -Path tests/unit
+```
+
+---
 
 ### Other Commands
 
@@ -103,32 +184,6 @@ automation-suite/
 # Reset autosuite state (deletes .autosuite/state.json)
 .\autosuite.ps1 state reset
 ```
-
-### State & Drift Detection
-
-Autosuite tracks state in `.autosuite/state.json` (repo-local, gitignored):
-
-- **lastApplied**: Manifest path, hash, and timestamp of last `apply`
-- **lastVerify**: Manifest path, hash, timestamp, and results of last `verify`
-- **appsObserved**: Map of winget IDs to installed status and version
-
-Drift detection compares current installed apps against a manifest:
-- **Missing**: Apps required by manifest but not installed
-- **Extra**: Apps installed but not in manifest
-
-The `verify` command emits a drift summary line:
-```
-[autosuite] Drift: Missing=<n> Extra=<n> VersionMismatches=<n>
-```
-
-### Manifest Locations
-
-| Path | Purpose |
-|------|---------|
-| `provisioning/manifests/fixture-test.jsonc` | Committed test fixture (deterministic) |
-| `provisioning/manifests/examples/` | Sanitized example manifests (committed, shareable) |
-| `provisioning/manifests/local/` | Machine-specific captures (gitignored) |
-| `.autosuite/state.json` | State file for drift detection (gitignored) |
 
 ### Capture Options
 

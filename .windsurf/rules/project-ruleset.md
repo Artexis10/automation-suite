@@ -737,3 +737,47 @@ CLI layer emits stable wrapper lines via `Write-Information -InformationAction C
 
 
 
+
+---
+
+## Continuous Integration (CI)
+
+GitHub Actions runs hermetic unit tests on:
+- Pull requests targeting `main`
+- Pushes to `main`
+
+**Docs-only changes do NOT trigger CI** (via `paths-ignore` for `**/*.md` and `docs/**`).
+
+### CI Workflow
+
+Location: `.github/workflows/ci.yml`
+
+### CI Command
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test_pester.ps1 -Path tests/unit
+```
+
+### CI Principles
+
+- **Hermetic**: No real winget installs; all external calls mocked
+- **Windows-first**: `runs-on: windows-latest`
+- **Cost-controlled**: `paths-ignore` prevents docs-only runs
+- **Vendored Pester**: Uses committed `tools/pester/` for deterministic execution
+
+### Output Stream Capture Policy
+
+Stable wrapper lines use Information stream (6). To capture in tests:
+
+```powershell
+$output = & .\autosuite.ps1 verify -Manifest foo.jsonc 6>&1
+```
+
+### Manifest Directory Policy
+
+| Path | Purpose | Git Status |
+|------|---------|------------|
+| `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
+| `provisioning/manifests/examples/` | Sanitized shareable examples | **Committed** |
+| `provisioning/manifests/fixture-test.jsonc` | Deterministic test fixture | **Committed** |
+
