@@ -348,6 +348,15 @@ cd provisioning
 # WARNING: This removes apps from root manifest that are not in new capture
 .\cli.ps1 -Command capture -Profile my-machine -Update -PruneMissingApps
 
+# Capture with config files from matched modules (v1.1)
+.\cli.ps1 -Command capture -Profile my-machine -WithConfig
+
+# Capture config from specific modules only
+.\cli.ps1 -Command capture -Profile my-machine -WithConfig -ConfigModules apps.git,apps.vscodium
+
+# Capture config to custom payload directory
+.\cli.ps1 -Command capture -Profile my-machine -WithConfig -PayloadOut .\my-payload
+
 # Generate a plan first, review it, then apply that exact plan
 .\cli.ps1 -Command plan -Manifest .\manifests\my-machine.jsonc
 # Review the plan in plans/<runId>.json, then:
@@ -422,6 +431,9 @@ cd provisioning
 | `-DiscoverWriteManualInclude` | true (when -Discover) | Generate `./includes/<profile>-manual.jsonc` with commented suggestions (requires -Profile) |
 | `-Update` | false | Merge new capture into existing manifest instead of overwriting |
 | `-PruneMissingApps` | false | With -Update, remove apps no longer present (root manifest only, never includes) |
+| `-WithConfig` | false | Capture config files from matched config modules into payload directory |
+| `-ConfigModules <list>` | - | Explicitly specify which config modules to capture (comma-separated, e.g., `apps.git,apps.vscodium`) |
+| `-PayloadOut <path>` | `provisioning/payload/` | Output directory for captured config payloads |
 | `-Plan` | - | Path to pre-generated plan file; mutually exclusive with -Manifest (apply command only) |
 
 ### Report Command Options
@@ -734,10 +746,24 @@ Config modules provide reusable restore/verify/capture configurations for applic
 - `capture --discover` shows available config modules for detected apps
 - Matching uses winget IDs, exe names in PATH, and registry uninstall display names
 
-**Manifest Hashing:**
-- `Get-ManifestHash` - Hash of raw manifest file on disk
-- `Get-ExpandedManifestHash` - Hash of fully expanded manifest (includes resolved, configModules expanded)
-- Use expanded hash for drift detection when configModules are in use
+**Manifest Hashing Semantics:**
+
+Two hash functions are available for different use cases:
+
+| Function | Computes | Use Case |
+|----------|----------|----------|
+| `Get-ManifestHash` | SHA256 of raw file bytes on disk | File change detection, cache invalidation |
+| `Get-ExpandedManifestHash` | SHA256 of normalized expanded JSON | Drift detection, state comparison |
+
+**Behavior:**
+- **Raw hash** reflects the source file content exactly (comments, whitespace, ordering)
+- **Expanded hash** reflects the effective desired state after:
+  - Includes are resolved and merged
+  - configModules are expanded into restore/verify items
+  - Internal fields (prefixed with `_`) are excluded
+  - Keys are sorted for deterministic output
+
+**Recommendation:** Use `Get-ExpandedManifestHash` for drift detection when configModules are in use, as it captures the actual executed configuration.
 
 **Seed Modules:**
 - `apps.git` - Git (verify: git command, ~/.gitconfig; capture: .gitconfig, .gitattributes)
