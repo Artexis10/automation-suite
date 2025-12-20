@@ -509,6 +509,85 @@ Describe "S95C Converter with real media" -Tag "OptionalTooling" {
         }
     }
     
+    Context "Progress file behavior" {
+        It "creates progress file during DTS conversion and removes it after completion" {
+            if (-not $script:HasDTSEncoder) {
+                Set-ItResult -Skipped -Because "DTS encoder (dca) not available in ffmpeg build"
+                return
+            }
+            
+            # Generate a small test MKV with DTS audio (longer duration for progress visibility)
+            $testMkv = Join-Path $script:SourceDir "progress-test.mkv"
+            
+            # Create 2-second video with DTS audio
+            $ffmpegArgs = @(
+                "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-f", "lavfi", "-i", "color=black:s=64x64:d=2",
+                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                "-t", "2",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-c:a", "dca", "-b:a", "768k", "-strict", "-2",
+                "-y", $testMkv
+            )
+            
+            $proc = Start-Process -FilePath "ffmpeg" -ArgumentList $ffmpegArgs -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $script:Sandbox.Path "ffmpeg-create-progress.log")
+            
+            if ($proc.ExitCode -ne 0 -or -not (Test-Path $testMkv)) {
+                Set-ItResult -Skipped -Because "Failed to create DTS test MKV file"
+                return
+            }
+            
+            $expectedProgressFile = Join-Path $script:DestDir "progress-test.mkv.progress.json"
+            $progressFileObserved = $false
+            
+            # Start the converter as a background job so we can poll for progress file
+            $converterJob = Start-Job -ScriptBlock {
+                param($scriptPath, $sourceDir, $destDir)
+                & $scriptPath -SourceRoot $sourceDir -DestRoot $destDir
+            } -ArgumentList $script:ScriptPath, $script:SourceDir, $script:DestDir
+            
+            # Poll for progress file existence (up to 10 seconds)
+            $pollStart = Get-Date
+            while (((Get-Date) - $pollStart).TotalSeconds -lt 10) {
+                if (Test-Path -LiteralPath $expectedProgressFile) {
+                    $progressFileObserved = $true
+                    # Try to read and validate content
+                    try {
+                        $content = Get-Content -LiteralPath $expectedProgressFile -Raw -ErrorAction SilentlyContinue
+                        if ($content) {
+                            $progress = $content | ConvertFrom-Json -ErrorAction SilentlyContinue
+                            if ($progress -and $progress.state -eq "running") {
+                                # Valid progress file observed
+                                break
+                            }
+                        }
+                    } catch {
+                        # Ignore parse errors during polling
+                    }
+                }
+                Start-Sleep -Milliseconds 200
+            }
+            
+            # Wait for job to complete
+            $converterJob | Wait-Job -Timeout 60 | Out-Null
+            $converterJob | Remove-Job -Force -ErrorAction SilentlyContinue
+            
+            # Assert: progress file was observed during run
+            $progressFileObserved | Should -BeTrue -Because "Progress file should appear during DTS conversion"
+            
+            # Assert: progress file is removed after completion
+            Test-Path -LiteralPath $expectedProgressFile | Should -BeFalse -Because "Progress file should be cleaned up after completion"
+            
+            # Assert: no orphan progress files remain
+            $orphanProgressFiles = Get-ChildItem -Path $script:DestDir -Filter "*.progress.json" -Recurse -ErrorAction SilentlyContinue
+            $orphanProgressFiles | Should -BeNullOrEmpty -Because "No progress files should remain after run"
+            
+            # Assert: output file exists (conversion succeeded)
+            $outputMkv = Join-Path $script:DestDir "progress-test.mkv"
+            Test-Path $outputMkv | Should -BeTrue
+        }
+    }
+    
     Context "Atomic temp file cleanup on failure" {
         It "cleans up temp files when ffprobe fails on corrupt input" {
             # The script copies files when ffprobe fails (no audio detected).

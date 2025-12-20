@@ -130,8 +130,10 @@ $converted = 0
 $failed    = 0
 $jobs      = @()
 $jobStartTimes = @{}
+$jobProgressFiles = @{}
 $durations = [System.Collections.ArrayList]::new()
 $running   = 0
+$lastProgressOutput = [DateTime]::MinValue
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "MKV S95C Converter" -ForegroundColor Cyan
@@ -182,6 +184,29 @@ function Format-Duration {
     return "{0:D2}:{1:D2}:{2:D2}" -f [int]$ts.TotalHours, $ts.Minutes, $ts.Seconds
 }
 
+# Helper to format duration as mm:ss (shorter for progress display)
+function Format-ShortDuration {
+    param([double]$Seconds)
+    $ts = [TimeSpan]::FromSeconds([Math]::Max(0, $Seconds))
+    if ($ts.TotalHours -ge 1) {
+        return "{0:D1}:{1:D2}:{2:D2}" -f [int]$ts.TotalHours, $ts.Minutes, $ts.Seconds
+    }
+    return "{0:D2}:{1:D2}" -f $ts.Minutes, $ts.Seconds
+}
+
+# Helper to read progress file safely
+function Read-ProgressFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+        return $content | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $null
+    }
+}
+
 # Resolve path to helpers (same directory as this script)
 $helpersPath = Join-Path -Path $PSScriptRoot -ChildPath "S95C-Helpers.ps1"
 if (-not (Test-Path -LiteralPath $helpersPath)) {
@@ -198,13 +223,40 @@ $worker = {
 
     # Build result object helper
     function New-Result {
-        param($Status, $RelativePath, $SourcePath, $DestPath, $Message)
+        param($Status, $RelativePath, $SourcePath, $DestPath, $Message, $ProgressFile)
         [PSCustomObject]@{
             Status       = $Status
             RelativePath = $RelativePath
             SourcePath   = $SourcePath
             DestPath     = $DestPath
             Message      = $Message
+            ProgressFile = $ProgressFile
+        }
+    }
+
+    # Helper to write progress file
+    function Write-ProgressFile {
+        param($Path, $RelativePath, $OutTimeMs, $Speed, $State)
+        $progress = @{
+            relativePath = $RelativePath
+            outTimeMs    = $OutTimeMs
+            speed        = $Speed
+            timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
+            state        = $State
+        }
+        try {
+            $json = $progress | ConvertTo-Json -Compress
+            [System.IO.File]::WriteAllText($Path, $json)
+        } catch {
+            # Ignore progress file write errors
+        }
+    }
+
+    # Helper to remove progress file safely
+    function Remove-ProgressFile {
+        param($Path)
+        if ($Path -and (Test-Path -LiteralPath $Path)) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -213,6 +265,7 @@ $worker = {
     $relativePath = $dest.RelativePath
     $destDir = $dest.DestDir
     $out = $dest.DestFile
+    $progressFile = $out + ".progress.json"
 
     # Ensure destination directory exists
     if (-not (Test-Path -LiteralPath $destDir)) {
@@ -221,8 +274,11 @@ $worker = {
 
     # Check if destination already exists (skip unless -Overwrite)
     if ((Test-Path -LiteralPath $out) -and -not $forceOverwrite) {
-        return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "output exists"
+        return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "output exists" -ProgressFile $null
     }
+
+    # Clean up any stale progress file from previous run
+    Remove-ProgressFile -Path $progressFile
 
     # Probe audio tracks with safe path handling
     $probeJson = $null
@@ -233,13 +289,13 @@ $worker = {
             $probe = $probeJson | ConvertFrom-Json -ErrorAction Stop
         }
     } catch {
-        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe JSON parse failed: $($_.Exception.Message)"
+        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe JSON parse failed: $($_.Exception.Message)" -ProgressFile $null
     }
 
     # If no audio streams found, copy the file (atomic)
     if (-not $probe -or -not $probe.streams) {
         if ($in -ieq $out) {
-            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "source equals destination"
+            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "source equals destination" -ProgressFile $null
         }
         # Atomic copy: write to temp then move
         $tempCopy = Join-Path -Path $destDir -ChildPath (".tmp_" + [System.Guid]::NewGuid().ToString("N") + ".mkv")
@@ -250,9 +306,9 @@ $worker = {
             if (Test-Path -LiteralPath $tempCopy) {
                 Remove-Item -LiteralPath $tempCopy -Force -ErrorAction SilentlyContinue
             }
-            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Copy failed: $($_.Exception.Message)"
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Copy failed: $($_.Exception.Message)" -ProgressFile $null
         }
-        return New-Result -Status "CopiedNoAudio" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "no audio streams"
+        return New-Result -Status "CopiedNoAudio" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "no audio streams" -ProgressFile $null
     }
 
     # Use helper to check for unsupported audio
@@ -261,7 +317,7 @@ $worker = {
     # If nothing unsupported, just copy the file (atomic)
     if (-not $hasUnsupported) {
         if ($in -ieq $out) {
-            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "source equals destination"
+            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "source equals destination" -ProgressFile $null
         }
         # Atomic copy: write to temp then move
         $tempCopy = Join-Path -Path $destDir -ChildPath (".tmp_" + [System.Guid]::NewGuid().ToString("N") + ".mkv")
@@ -272,9 +328,9 @@ $worker = {
             if (Test-Path -LiteralPath $tempCopy) {
                 Remove-Item -LiteralPath $tempCopy -Force -ErrorAction SilentlyContinue
             }
-            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Copy failed: $($_.Exception.Message)"
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Copy failed: $($_.Exception.Message)" -ProgressFile $null
         }
-        return New-Result -Status "CopiedCompatible" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "compatible audio"
+        return New-Result -Status "CopiedCompatible" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "compatible audio" -ProgressFile $null
     }
 
     # Use helper to build codec args
@@ -284,38 +340,99 @@ $worker = {
     $tempFile = Join-Path -Path $destDir -ChildPath (".tmp_" + [System.Guid]::NewGuid().ToString("N") + ".mkv")
 
     try {
-        # Run ffmpeg conversion with safer flags
-        & ffmpeg -hide_banner -loglevel error -nostdin -i "$in" -map 0 -map_chapters 0 -c:v copy -c:s copy @codecArgs "$tempFile" 2>&1 | Out-Null
-
-        if ($LASTEXITCODE -ne 0) {
-            # Clean up temp file on failure
+        # ffmpeg progress temp file (ffmpeg writes key=value pairs here)
+        $ffmpegProgressTempFile = Join-Path -Path $destDir -ChildPath (".ffprog_" + [System.Guid]::NewGuid().ToString("N") + ".txt")
+        
+        # Write initial progress
+        Write-ProgressFile -Path $progressFile -RelativePath $relativePath -OutTimeMs 0 -Speed "0" -State "running"
+        
+        # Run ffmpeg as a job-internal process with progress monitoring
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "ffmpeg"
+        $psi.Arguments = "-hide_banner -loglevel error -nostdin -nostats -progress `"$ffmpegProgressTempFile`" -i `"$in`" -map 0 -map_chapters 0 -c:v copy -c:s copy $($codecArgs -join ' ') `"$tempFile`""
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardError = $true
+        
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        
+        # Poll progress file while ffmpeg runs
+        while (-not $proc.HasExited) {
+            Start-Sleep -Milliseconds 500
+            
+            # Parse ffmpeg progress file
+            if (Test-Path -LiteralPath $ffmpegProgressTempFile) {
+                try {
+                    $progressContent = Get-Content -LiteralPath $ffmpegProgressTempFile -Raw -ErrorAction SilentlyContinue
+                    if ($progressContent) {
+                        $outTimeUs = 0
+                        $speed = "0"
+                        
+                        # Parse key=value pairs (ffmpeg progress format)
+                        foreach ($line in ($progressContent -split "`n")) {
+                            if ($line -match "^out_time_us=(\d+)") {
+                                $outTimeUs = [long]$Matches[1]
+                            }
+                            if ($line -match "^speed=([\d.]+)x") {
+                                $speed = $Matches[1]
+                            }
+                        }
+                        
+                        $outTimeMs = [long]($outTimeUs / 1000)
+                        Write-ProgressFile -Path $progressFile -RelativePath $relativePath -OutTimeMs $outTimeMs -Speed $speed -State "running"
+                    }
+                } catch {
+                    # Ignore parse errors
+                }
+            }
+        }
+        
+        $proc.WaitForExit()
+        $ffmpegExitCode = $proc.ExitCode
+        
+        # Write final progress state
+        Write-ProgressFile -Path $progressFile -RelativePath $relativePath -OutTimeMs 0 -Speed "0" -State "end"
+        
+        # Clean up ffmpeg progress temp file
+        if (Test-Path -LiteralPath $ffmpegProgressTempFile) {
+            Remove-Item -LiteralPath $ffmpegProgressTempFile -Force -ErrorAction SilentlyContinue
+        }
+        
+        if ($ffmpegExitCode -ne 0) {
+            # Clean up temp file and progress file on failure
             if (Test-Path -LiteralPath $tempFile) {
                 Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
             }
-            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffmpeg failed (exit code: $LASTEXITCODE)"
+            Remove-ProgressFile -Path $progressFile
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffmpeg failed (exit code: $ffmpegExitCode)" -ProgressFile $null
         }
 
         # Quick verification: ensure no DTS/TrueHD in the output
         $check = & ffprobe -hide_banner -loglevel error -select_streams a -show_entries stream=codec_name -of default=nw=1:nk=1 -i "$tempFile" 2>&1
 
         if ($check -match "dts" -or $check -match "truehd") {
-            # Clean up temp file on verification failure
+            # Clean up temp file and progress file on verification failure
             if (Test-Path -LiteralPath $tempFile) {
                 Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
             }
-            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unsupported audio still present after conversion"
+            Remove-ProgressFile -Path $progressFile
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unsupported audio still present after conversion" -ProgressFile $null
         }
 
         # Atomic rename: move temp file to final destination
         Move-Item -LiteralPath $tempFile -Destination $out -Force
+        
+        # Clean up progress file on success
+        Remove-ProgressFile -Path $progressFile
 
-        return New-Result -Status "Converted" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "DTS/TrueHD -> FLAC"
+        return New-Result -Status "Converted" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "DTS/TrueHD -> FLAC" -ProgressFile $null
     } catch {
-        # Clean up temp file on any error
+        # Clean up temp file and progress file on any error
         if (Test-Path -LiteralPath $tempFile) {
             Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
         }
-        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unexpected error: $($_.Exception.Message)"
+        Remove-ProgressFile -Path $progressFile
+        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unexpected error: $($_.Exception.Message)" -ProgressFile $null
     }
 }
 
@@ -413,6 +530,16 @@ function Complete-Job {
         [void]$durations.Add($durationSec)
     }
     
+    # Clean up progress file tracking
+    if ($jobProgressFiles.ContainsKey($finishedJob.Id)) {
+        $progressFile = $jobProgressFiles[$finishedJob.Id]
+        # Ensure progress file is removed (belt and suspenders)
+        if ($progressFile -and (Test-Path -LiteralPath $progressFile)) {
+            Remove-Item -LiteralPath $progressFile -Force -ErrorAction SilentlyContinue
+        }
+        $jobProgressFiles.Remove($finishedJob.Id)
+    }
+    
     $counts = Process-JobResult -result $result -durationSec $durationSec -quietMode $Quiet.IsPresent
     
     $script:skipped += $counts.skipped
@@ -440,7 +567,7 @@ function Complete-Job {
     $script:jobs = @($script:jobs | Where-Object { $_.Id -ne $finishedJob.Id })
 }
 
-# Helper to update progress bar
+# Helper to update progress bar with real-time ffmpeg progress
 function Update-ProgressBar {
     $percent = if ($total -gt 0) { [int](($completed / [double]$total) * 100) } else { 0 }
     
@@ -454,43 +581,93 @@ function Update-ProgressBar {
         $etaStr = Format-Duration -Seconds $etaSec
     }
     
-    $statusLine = "$completed/$total done | running $running | skip $skipped | copy $copied | conv $converted | fail $failed | avg {0:N1}s | ETA $etaStr" -f $avgSec
+    # Check for real-time progress from running conversions
+    $progressInfo = ""
+    foreach ($jobId in @($jobProgressFiles.Keys)) {
+        $progressFile = $jobProgressFiles[$jobId]
+        if ($progressFile) {
+            $progress = Read-ProgressFile -Path $progressFile
+            if ($progress -and $progress.state -eq "running" -and $progress.outTimeMs -gt 0) {
+                $fileName = Split-Path -Leaf $progress.relativePath
+                if ($fileName.Length -gt 20) {
+                    $fileName = $fileName.Substring(0, 17) + "..."
+                }
+                $timeStr = Format-ShortDuration -Seconds ($progress.outTimeMs / 1000)
+                $speedStr = if ($progress.speed -and $progress.speed -ne "0") { "@{0}x" -f $progress.speed } else { "" }
+                $progressInfo = "$fileName $timeStr $speedStr"
+                break  # Show first active conversion
+            }
+        }
+    }
+    
+    # Build status line
+    $statusLine = "$completed/$total done | running $running"
+    if ($progressInfo) {
+        $statusLine += " | $progressInfo"
+    }
+    $statusLine += " | skip $skipped | copy $copied | conv $converted | fail $failed"
+    if ($avgSec -gt 0) {
+        $statusLine += " | avg {0:N1}s" -f $avgSec
+    }
+    $statusLine += " | ETA $etaStr"
     
     Write-Progress -Activity "Converting MKVs for S95C" `
                    -Status $statusLine `
                    -PercentComplete $percent
+    
+    # Throttled console progress output (every 15 seconds, unless -Quiet)
+    if (-not $Quiet.IsPresent -and $progressInfo) {
+        $now = Get-Date
+        if (($now - $script:lastProgressOutput).TotalSeconds -ge 15) {
+            Write-Host "[PROGRESS] $progressInfo" -ForegroundColor DarkGray
+            $script:lastProgressOutput = $now
+        }
+    }
 }
 
 # Queue and manage jobs with throttling and progress
 foreach ($file in $files) {
 
     while ($jobs.Count -ge $MaxParallel) {
-        $finished = Wait-Job -Job $jobs -Any -Timeout 2
+        # Use shorter timeout for more responsive progress updates
+        $finished = Wait-Job -Job $jobs -Any -Timeout 1
         if ($finished) {
             Complete-Job -finishedJob $finished
-            Update-ProgressBar
         }
+        Update-ProgressBar
     }
 
+    # Compute progress file path for this job
+    $destInfo = Get-MirroredDestination -SourceFilePath $file.FullName -SourceRoot $sourceRootFull -DestRoot $destRootFull
+    $expectedProgressFile = $destInfo.DestFile + ".progress.json"
+    
     # Start new job
     $job = Start-Job -ScriptBlock $worker -ArgumentList $file.FullName, $sourceRootFull, $destRootFull, $helpersPath, $Overwrite.IsPresent
     $jobs += $job
     $jobStartTimes[$job.Id] = Get-Date
+    $jobProgressFiles[$job.Id] = $expectedProgressFile
     $running++
     
     Update-ProgressBar
 }
 
-# Drain remaining jobs
+# Drain remaining jobs with progress polling
 while ($jobs.Count -gt 0) {
-    $finished = Wait-Job -Job $jobs -Any -Timeout 2
+    # Use shorter timeout for more responsive progress updates
+    $finished = Wait-Job -Job $jobs -Any -Timeout 1
     if ($finished) {
         Complete-Job -finishedJob $finished
-        Update-ProgressBar
     }
+    Update-ProgressBar
 }
 
 Write-Progress -Activity "Converting MKVs for S95C" -Completed
+
+# Final cleanup: remove any orphan progress files in dest tree
+$orphanProgressFiles = Get-ChildItem -Path $destRootFull -Filter "*.progress.json" -Recurse -ErrorAction SilentlyContinue
+foreach ($orphan in $orphanProgressFiles) {
+    Remove-Item -LiteralPath $orphan.FullName -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "Conversion Complete" -ForegroundColor Cyan
