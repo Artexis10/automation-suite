@@ -172,9 +172,126 @@ Describe "Convert-Unsupported-Audio-for-S95C.ps1" -Tag "Integration" {
             # The worker creates directories before attempting ffprobe
             $expectedDestDir = Join-Path $script:DestDir "Movies\Action\Sci-Fi"
             Test-Path $expectedDestDir | Should -BeTrue
+        }
+    }
+}
+
+Describe "S95C Converter -Overwrite behavior" -Tag "Integration" {
+    
+    BeforeEach {
+        $script:Sandbox = New-TestSandbox -Prefix "s95c-overwrite"
+        $script:SourceDir = Join-Path $script:Sandbox.Path "source"
+        $script:DestDir = Join-Path $script:Sandbox.Path "dest"
+        New-Item -ItemType Directory -Path $script:SourceDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $script:DestDir -Force | Out-Null
+    }
+    
+    AfterEach {
+        if ($script:Sandbox -and $script:Sandbox.Path -and (Test-Path $script:Sandbox.Path)) {
+            Remove-Item -Path $script:Sandbox.Path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    
+    Context "Without -Overwrite (default skip behavior)" {
+        It "skips processing when output already exists" {
+            # Create a dummy MKV in source
+            $sourceMkv = Join-Path $script:SourceDir "test.mkv"
+            [System.IO.File]::WriteAllBytes($sourceMkv, [byte[]](0x1A, 0x45, 0xDF, 0xA3, 0x00, 0x00, 0x00, 0x00))
             
-            # File should be queued (directory creation happens in worker before probe)
-            $result.StdOut | Should -Match "\[QUEUE\]"
+            # Pre-create output file (simulating previous run)
+            $destMkv = Join-Path $script:DestDir "test.mkv"
+            [System.IO.File]::WriteAllText($destMkv, "existing output")
+            $originalContent = Get-Content -LiteralPath $destMkv -Raw
+            
+            # Run without -Overwrite
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # Should report SKIP
+            $result.StdOut | Should -Match "\[SKIP\]"
+            
+            # Output file should be unchanged
+            $newContent = Get-Content -LiteralPath $destMkv -Raw
+            $newContent | Should -Be $originalContent
+        }
+    }
+    
+    Context "With -Overwrite" {
+        It "reprocesses file when output exists and -Overwrite is set" {
+            # Create a dummy MKV in source (will be copied as "no audio")
+            $sourceMkv = Join-Path $script:SourceDir "test.mkv"
+            [System.IO.File]::WriteAllBytes($sourceMkv, [byte[]](0x1A, 0x45, 0xDF, 0xA3, 0x00, 0x00, 0x00, 0x00))
+            
+            # Pre-create output file with different content
+            $destMkv = Join-Path $script:DestDir "test.mkv"
+            [System.IO.File]::WriteAllText($destMkv, "old output content")
+            $originalSize = (Get-Item $destMkv).Length
+            
+            # Run with -Overwrite
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                    Overwrite = $true
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # Should NOT report SKIP (should process the file)
+            $result.StdOut | Should -Not -Match "\[SKIP\].*test\.mkv"
+            
+            # Output file should have been replaced (different size from original text)
+            $newSize = (Get-Item $destMkv).Length
+            $newSize | Should -Not -Be $originalSize
+        }
+        
+        It "processes file normally on first run, skips on second, processes with -Overwrite on third" {
+            # Create a dummy MKV in source
+            $sourceMkv = Join-Path $script:SourceDir "sequence.mkv"
+            [System.IO.File]::WriteAllBytes($sourceMkv, [byte[]](0x1A, 0x45, 0xDF, 0xA3, 0x00, 0x00, 0x00, 0x00))
+            
+            # First run: should process (COPY or ERROR, but not SKIP)
+            $result1 = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            $result1.StdOut | Should -Not -Match "\[SKIP\].*sequence\.mkv"
+            
+            # Output should exist now
+            $destMkv = Join-Path $script:DestDir "sequence.mkv"
+            Test-Path $destMkv | Should -BeTrue
+            
+            # Second run without -Overwrite: should SKIP
+            $result2 = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            $result2.StdOut | Should -Match "\[SKIP\].*sequence\.mkv"
+            
+            # Third run with -Overwrite: should process again
+            $result3 = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                    Overwrite = $true
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            $result3.StdOut | Should -Not -Match "\[SKIP\].*sequence\.mkv"
         }
     }
 }

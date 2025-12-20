@@ -23,6 +23,19 @@ MKV files in the top-level SourceRoot directory.
 Maximum number of concurrent encoding jobs. Defaults to 2. Increase for faster processing
 on multi-core systems, but be mindful of CPU and disk I/O load.
 
+.PARAMETER Overwrite
+If specified, reprocesses files even if the output already exists. By default, existing
+output files are skipped. Uses atomic temp-file writes for safety.
+
+.PARAMETER Quiet
+If specified, suppresses per-file success output (COPY/CONVERT/SKIP lines). Error lines
+and the final summary are still printed.
+
+.PARAMETER LogPath
+Optional path to a JSONL log file. If provided, appends one JSON line per completed file
+with fields: timestampUtc, status, relativePath, sourcePath, destPath, durationSec, message.
+The directory will be created if it doesn't exist.
+
 .EXAMPLE
 # Convert MKVs in D:\Movies (top-level only, 2 parallel jobs)
 .\Convert-Unsupported-Audio-for-S95C.ps1 -SourceRoot "D:\Movies" -DestRoot "D:\Movies_S95C"
@@ -35,10 +48,18 @@ on multi-core systems, but be mindful of CPU and disk I/O load.
 # Convert current directory recursively
 .\Convert-Unsupported-Audio-for-S95C.ps1 -Recurse
 
+.EXAMPLE
+# Reprocess all files, overwriting existing outputs
+.\Convert-Unsupported-Audio-for-S95C.ps1 -SourceRoot "D:\Movies" -DestRoot "D:\Movies_S95C" -Overwrite
+
+.EXAMPLE
+# Quiet mode with logging
+.\Convert-Unsupported-Audio-for-S95C.ps1 -SourceRoot "D:\Movies" -DestRoot "D:\Movies_S95C" -Quiet -LogPath "C:\Logs\s95c.jsonl"
+
 .NOTES
 Requires: ffmpeg and ffprobe (must be in PATH)
 Output: Files are written to DestRoot with the same directory structure as SourceRoot
-Status: [INFO], [SKIP], [WARN], [OK], [CONVERT], [ERROR], [QUEUE], [DONE]
+Status: [CONVERT], [COPY], [SKIP], [ERROR]
 #>
 
 param(
@@ -46,7 +67,10 @@ param(
     [string]$DestRoot   = ".\S95C_Converted",
     [switch]$Recurse,
     [ValidateRange(1, 64)]
-    [int]$MaxParallel   = 2
+    [int]$MaxParallel   = 2,
+    [switch]$Overwrite,
+    [switch]$Quiet,
+    [string]$LogPath
 )
 
 # Resolve roots to full paths
@@ -105,17 +129,58 @@ $copied    = 0
 $converted = 0
 $failed    = 0
 $jobs      = @()
+$jobStartTimes = @{}
+$durations = [System.Collections.ArrayList]::new()
+$running   = 0
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "MKV S95C Converter" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Found $total MKV file(s) to process"
 Write-Host ""
-Write-Host "  Source:  $sourceRootFull"
-Write-Host "  Dest:    $destRootFull"
-Write-Host "  Recurse: $($Recurse.IsPresent)"
-Write-Host "  Parallel jobs: $MaxParallel"
+Write-Host "  Source:    $sourceRootFull"
+Write-Host "  Dest:      $destRootFull"
+Write-Host "  Recurse:   $($Recurse.IsPresent)"
+Write-Host "  Parallel:  $MaxParallel"
+Write-Host "  Overwrite: $($Overwrite.IsPresent)"
+Write-Host "  Quiet:     $($Quiet.IsPresent)"
+if ($LogPath) {
+    Write-Host "  LogPath:   $LogPath"
+}
 Write-Host "========================================`n" -ForegroundColor Cyan
+
+# Prepare log file if specified
+$logFileReady = $false
+if ($LogPath) {
+    try {
+        $logDir = Split-Path -Path $LogPath -Parent
+        if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+        $logFileReady = $true
+    } catch {
+        Write-Host "[WARN] Could not create log directory: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Helper to write JSONL log entry (called from parent process only)
+function Write-LogEntry {
+    param($Entry)
+    if (-not $logFileReady -or -not $LogPath) { return }
+    try {
+        $json = $Entry | ConvertTo-Json -Compress
+        Add-Content -LiteralPath $LogPath -Value $json -Encoding UTF8
+    } catch {
+        Write-Host "[WARN] Log write failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Helper to format duration as hh:mm:ss
+function Format-Duration {
+    param([double]$Seconds)
+    $ts = [TimeSpan]::FromSeconds([Math]::Max(0, $Seconds))
+    return "{0:D2}:{1:D2}:{2:D2}" -f [int]$ts.TotalHours, $ts.Minutes, $ts.Seconds
+}
 
 # Resolve path to helpers (same directory as this script)
 $helpersPath = Join-Path -Path $PSScriptRoot -ChildPath "S95C-Helpers.ps1"
@@ -126,7 +191,7 @@ if (-not (Test-Path -LiteralPath $helpersPath)) {
 
 # Worker scriptblock for background jobs
 $worker = {
-    param($in, $sourceRootFull, $destRootFull, $helpersPath)
+    param($in, $sourceRootFull, $destRootFull, $helpersPath, $forceOverwrite)
 
     # Load helper functions inside job context
     . $helpersPath
@@ -154,9 +219,9 @@ $worker = {
         New-Item -ItemType Directory -Path $destDir -Force | Out-Null
     }
 
-    # Check if destination already exists
-    if (Test-Path -LiteralPath $out) {
-        return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Already exists"
+    # Check if destination already exists (skip unless -Overwrite)
+    if ((Test-Path -LiteralPath $out) -and -not $forceOverwrite) {
+        return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "output exists"
     }
 
     # Probe audio tracks with safe path handling
@@ -171,25 +236,45 @@ $worker = {
         return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe JSON parse failed: $($_.Exception.Message)"
     }
 
-    # If no audio streams found, copy the file
+    # If no audio streams found, copy the file (atomic)
     if (-not $probe -or -not $probe.streams) {
         if ($in -ieq $out) {
-            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Source equals destination"
+            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "source equals destination"
         }
-        Copy-Item -LiteralPath $in -Destination $out -Force
-        return New-Result -Status "CopiedNoAudio" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "No audio streams"
+        # Atomic copy: write to temp then move
+        $tempCopy = Join-Path -Path $destDir -ChildPath (".tmp_" + [System.Guid]::NewGuid().ToString("N") + ".mkv")
+        try {
+            Copy-Item -LiteralPath $in -Destination $tempCopy -Force
+            Move-Item -LiteralPath $tempCopy -Destination $out -Force
+        } catch {
+            if (Test-Path -LiteralPath $tempCopy) {
+                Remove-Item -LiteralPath $tempCopy -Force -ErrorAction SilentlyContinue
+            }
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Copy failed: $($_.Exception.Message)"
+        }
+        return New-Result -Status "CopiedNoAudio" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "no audio streams"
     }
 
     # Use helper to check for unsupported audio
     $hasUnsupported = Test-HasUnsupportedAudio -AudioStreams $probe.streams
 
-    # If nothing unsupported, just copy the file
+    # If nothing unsupported, just copy the file (atomic)
     if (-not $hasUnsupported) {
         if ($in -ieq $out) {
-            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Source equals destination"
+            return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "source equals destination"
         }
-        Copy-Item -LiteralPath $in -Destination $out -Force
-        return New-Result -Status "CopiedCompatible" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Compatible audio"
+        # Atomic copy: write to temp then move
+        $tempCopy = Join-Path -Path $destDir -ChildPath (".tmp_" + [System.Guid]::NewGuid().ToString("N") + ".mkv")
+        try {
+            Copy-Item -LiteralPath $in -Destination $tempCopy -Force
+            Move-Item -LiteralPath $tempCopy -Destination $out -Force
+        } catch {
+            if (Test-Path -LiteralPath $tempCopy) {
+                Remove-Item -LiteralPath $tempCopy -Force -ErrorAction SilentlyContinue
+            }
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Copy failed: $($_.Exception.Message)"
+        }
+        return New-Result -Status "CopiedCompatible" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "compatible audio"
     }
 
     # Use helper to build codec args
@@ -224,7 +309,7 @@ $worker = {
         # Atomic rename: move temp file to final destination
         Move-Item -LiteralPath $tempFile -Destination $out -Force
 
-        return New-Result -Status "Converted" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "DTS/TrueHD to FLAC"
+        return New-Result -Status "Converted" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "DTS/TrueHD -> FLAC"
     } catch {
         # Clean up temp file on any error
         if (Test-Path -LiteralPath $tempFile) {
@@ -234,44 +319,147 @@ $worker = {
     }
 }
 
-# Helper to process job result and update counters
+# Helper to process job result, update counters, and output
 function Process-JobResult {
-    param($result)
+    param($result, $durationSec, $quietMode)
+    
+    $counts = @{ skipped = 0; copied = 0; converted = 0; failed = 0 }
+    $logStatus = "unknown"
+    $logMessage = ""
     
     if ($null -eq $result) {
-        return @{ skipped = 0; copied = 0; converted = 0; failed = 1 }
+        $counts.failed = 1
+        $logStatus = "error"
+        $logMessage = "null result"
+        Write-Host "[ERROR]   <unknown> - null result from job" -ForegroundColor Red
+    } else {
+        $durStr = if ($durationSec -ge 0) { "({0:N1}s)" -f $durationSec } else { "" }
+        
+        switch ($result.Status) {
+            "SkippedExists" {
+                $counts.skipped = 1
+                $logStatus = "skip"
+                $logMessage = $result.Message
+                if (-not $quietMode) {
+                    Write-Host "[SKIP]    $($result.RelativePath) - $($result.Message)"
+                }
+            }
+            "CopiedNoAudio" {
+                $counts.copied = 1
+                $logStatus = "copy"
+                $logMessage = $result.Message
+                if (-not $quietMode) {
+                    Write-Host "[COPY]    $($result.RelativePath) $durStr - $($result.Message)"
+                }
+            }
+            "CopiedCompatible" {
+                $counts.copied = 1
+                $logStatus = "copy"
+                $logMessage = $result.Message
+                if (-not $quietMode) {
+                    Write-Host "[COPY]    $($result.RelativePath) $durStr - $($result.Message)"
+                }
+            }
+            "Converted" {
+                $counts.converted = 1
+                $logStatus = "convert"
+                $logMessage = $result.Message
+                if (-not $quietMode) {
+                    Write-Host "[CONVERT] $($result.RelativePath) $durStr - $($result.Message)" -ForegroundColor Green
+                }
+            }
+            "Failed" {
+                $counts.failed = 1
+                $logStatus = "error"
+                $logMessage = $result.Message
+                # Always print errors even in quiet mode
+                Write-Host "[ERROR]   $($result.RelativePath) - $($result.Message)" -ForegroundColor Red
+            }
+            default {
+                $counts.failed = 1
+                $logStatus = "error"
+                $logMessage = "Unknown status: $($result.Status)"
+                Write-Host "[ERROR]   $($result.RelativePath) - unknown status" -ForegroundColor Red
+            }
+        }
     }
     
-    switch ($result.Status) {
-        "SkippedExists" {
-            Write-Host "[SKIP] $($result.RelativePath): $($result.Message)"
-            return @{ skipped = 1; copied = 0; converted = 0; failed = 0 }
-        }
-        "CopiedNoAudio" {
-            Write-Host "[OK] Copied (no audio): $($result.RelativePath)"
-            return @{ skipped = 0; copied = 1; converted = 0; failed = 0 }
-        }
-        "CopiedCompatible" {
-            Write-Host "[OK] Copied (compatible): $($result.RelativePath)"
-            return @{ skipped = 0; copied = 1; converted = 0; failed = 0 }
-        }
-        "Converted" {
-            Write-Host "[CONVERT] $($result.RelativePath): $($result.Message)" -ForegroundColor Green
-            return @{ skipped = 0; copied = 0; converted = 1; failed = 0 }
-        }
-        "Failed" {
-            Write-Host "[ERROR] $($result.RelativePath): $($result.Message)" -ForegroundColor Red
-            return @{ skipped = 0; copied = 0; converted = 0; failed = 1 }
-        }
-        default {
-            Write-Host "[WARN] Unknown status for $($result.RelativePath)"
-            return @{ skipped = 0; copied = 0; converted = 0; failed = 1 }
-        }
+    # Return counts plus log info
+    return @{
+        skipped = $counts.skipped
+        copied = $counts.copied
+        converted = $counts.converted
+        failed = $counts.failed
+        logStatus = $logStatus
+        logMessage = $logMessage
     }
 }
 
 # Load helpers for Get-MirroredDestination (used for consistent [QUEUE] path display)
 . $helpersPath
+
+# Helper to handle completed job
+function Complete-Job {
+    param($finishedJob)
+    
+    $result = Receive-Job $finishedJob
+    
+    # Compute duration from start time
+    $durationSec = -1
+    if ($jobStartTimes.ContainsKey($finishedJob.Id)) {
+        $startTime = $jobStartTimes[$finishedJob.Id]
+        $durationSec = ((Get-Date) - $startTime).TotalSeconds
+        $jobStartTimes.Remove($finishedJob.Id)
+        [void]$durations.Add($durationSec)
+    }
+    
+    $counts = Process-JobResult -result $result -durationSec $durationSec -quietMode $Quiet.IsPresent
+    
+    $script:skipped += $counts.skipped
+    $script:copied += $counts.copied
+    $script:converted += $counts.converted
+    $script:failed += $counts.failed
+    $script:running--
+    $script:completed++
+    
+    # Write log entry if logging enabled
+    if ($logFileReady -and $result) {
+        $logEntry = @{
+            timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
+            status       = $counts.logStatus
+            relativePath = $result.RelativePath
+            sourcePath   = $result.SourcePath
+            destPath     = $result.DestPath
+            durationSec  = [Math]::Round($durationSec, 2)
+            message      = $counts.logMessage
+        }
+        Write-LogEntry -Entry $logEntry
+    }
+    
+    Remove-Job $finishedJob
+    $script:jobs = @($script:jobs | Where-Object { $_.Id -ne $finishedJob.Id })
+}
+
+# Helper to update progress bar
+function Update-ProgressBar {
+    $percent = if ($total -gt 0) { [int](($completed / [double]$total) * 100) } else { 0 }
+    
+    # Compute average duration and ETA
+    $avgSec = 0
+    $etaStr = "--:--:--"
+    if ($durations.Count -gt 0) {
+        $avgSec = ($durations | Measure-Object -Average).Average
+        $remaining = $total - $completed
+        $etaSec = $avgSec * $remaining
+        $etaStr = Format-Duration -Seconds $etaSec
+    }
+    
+    $statusLine = "$completed/$total done | running $running | skip $skipped | copy $copied | conv $converted | fail $failed | avg {0:N1}s | ETA $etaStr" -f $avgSec
+    
+    Write-Progress -Activity "Converting MKVs for S95C" `
+                   -Status $statusLine `
+                   -PercentComplete $percent
+}
 
 # Queue and manage jobs with throttling and progress
 foreach ($file in $files) {
@@ -279,50 +467,30 @@ foreach ($file in $files) {
     while ($jobs.Count -ge $MaxParallel) {
         $finished = Wait-Job -Job $jobs -Any -Timeout 2
         if ($finished) {
-            $result = Receive-Job $finished
-            $counts = Process-JobResult -result $result
-            $skipped += $counts.skipped
-            $copied += $counts.copied
-            $converted += $counts.converted
-            $failed += $counts.failed
-            Remove-Job $finished
-            $jobs = $jobs | Where-Object { $_.Id -ne $finished.Id }
-            $completed++
-            $percent = [int](($completed / [double]$total) * 100)
-            Write-Progress -Activity "Converting MKVs for S95C" `
-                           -Status "$completed of $total file(s) done" `
-                           -PercentComplete $percent
+            Complete-Job -finishedJob $finished
+            Update-ProgressBar
         }
     }
 
-    $destInfo = Get-MirroredDestination -SourceFilePath $file.FullName -SourceRoot $sourceRootFull -DestRoot $destRootFull
-    Write-Host "[QUEUE] $($destInfo.RelativePath)"
-
-    $job = Start-Job -ScriptBlock $worker -ArgumentList $file.FullName, $sourceRootFull, $destRootFull, $helpersPath
+    # Start new job
+    $job = Start-Job -ScriptBlock $worker -ArgumentList $file.FullName, $sourceRootFull, $destRootFull, $helpersPath, $Overwrite.IsPresent
     $jobs += $job
+    $jobStartTimes[$job.Id] = Get-Date
+    $running++
+    
+    Update-ProgressBar
 }
 
 # Drain remaining jobs
 while ($jobs.Count -gt 0) {
     $finished = Wait-Job -Job $jobs -Any -Timeout 2
     if ($finished) {
-        $result = Receive-Job $finished
-        $counts = Process-JobResult -result $result
-        $skipped += $counts.skipped
-        $copied += $counts.copied
-        $converted += $counts.converted
-        $failed += $counts.failed
-        Remove-Job $finished
-        $jobs = $jobs | Where-Object { $_.Id -ne $finished.Id }
-        $completed++
-        $percent = [int](($completed / [double]$total) * 100)
-        Write-Progress -Activity "Converting MKVs" `
-                       -Status "$completed of $total file(s) done" `
-                       -PercentComplete $percent
+        Complete-Job -finishedJob $finished
+        Update-ProgressBar
     }
 }
 
-Write-Progress -Activity "Converting MKVs" -Completed
+Write-Progress -Activity "Converting MKVs for S95C" -Completed
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "Conversion Complete" -ForegroundColor Cyan
