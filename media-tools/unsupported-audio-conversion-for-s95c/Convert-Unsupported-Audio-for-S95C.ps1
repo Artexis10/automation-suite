@@ -270,6 +270,9 @@ function Process-JobResult {
     }
 }
 
+# Load helpers for Get-MirroredDestination (used for consistent [QUEUE] path display)
+. $helpersPath
+
 # Queue and manage jobs with throttling and progress
 foreach ($file in $files) {
 
@@ -292,8 +295,8 @@ foreach ($file in $files) {
         }
     }
 
-    $relativePath = $file.FullName.Substring($sourceRootFull.Length) -replace "^[\\/]+",""
-    Write-Host "[QUEUE] $relativePath"
+    $destInfo = Get-MirroredDestination -SourceFilePath $file.FullName -SourceRoot $sourceRootFull -DestRoot $destRootFull
+    Write-Host "[QUEUE] $($destInfo.RelativePath)"
 
     $job = Start-Job -ScriptBlock $worker -ArgumentList $file.FullName, $sourceRootFull, $destRootFull, $helpersPath
     $jobs += $job

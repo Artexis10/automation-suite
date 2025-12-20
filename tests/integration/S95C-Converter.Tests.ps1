@@ -146,28 +146,20 @@ Describe "Convert-Unsupported-Audio-for-S95C.ps1" -Tag "Integration" {
         }
     }
     
-    Context "Directory structure mirroring" -Tag "OptionalTooling" {
-        BeforeEach {
-            # Skip if ffmpeg not available
-            if (-not (Test-HasCommand -Name "ffmpeg")) {
-                Set-ItResult -Skipped -Because "ffmpeg not found; skipping OptionalTooling tests"
-            }
-            if (-not (Test-HasCommand -Name "ffprobe")) {
-                Set-ItResult -Skipped -Because "ffprobe not found; skipping OptionalTooling tests"
-            }
-        }
+    Context "Directory structure mirroring" {
+        # Tool-free test: directory creation happens before probe/conversion attempt
+        # The script creates destination directories when queuing files, regardless of conversion outcome
         
-        It "creates destination directory structure" {
+        It "creates destination directory structure before conversion attempt" {
             # Create nested source structure
-            $nestedDir = Join-Path $script:SourceDir "Movies\Action"
+            $nestedDir = Join-Path $script:SourceDir "Movies\Action\Sci-Fi"
             New-Item -ItemType Directory -Path $nestedDir -Force | Out-Null
             
-            # Create a minimal dummy MKV file (just touch for structure test)
-            # Note: This test verifies directory creation, not actual conversion
+            # Create a minimal dummy MKV file (invalid content, will fail probe)
             $testFile = Join-Path $nestedDir "test.mkv"
             [System.IO.File]::WriteAllBytes($testFile, [byte[]](0x1A, 0x45, 0xDF, 0xA3))
             
-            $null = Invoke-ToolScript `
+            $result = Invoke-ToolScript `
                 -ScriptPath $script:ScriptPath `
                 -Arguments @{
                     SourceRoot = $script:SourceDir
@@ -176,10 +168,13 @@ Describe "Convert-Unsupported-Audio-for-S95C.ps1" -Tag "Integration" {
                 } `
                 -SandboxPath $script:Sandbox.Path
             
-            # Destination structure should be created (even if conversion fails on dummy file)
-            # The script creates directories before attempting conversion
-            $expectedDestDir = Join-Path $script:DestDir "Movies\Action"
+            # Destination structure should be created (even though conversion fails on dummy file)
+            # The worker creates directories before attempting ffprobe
+            $expectedDestDir = Join-Path $script:DestDir "Movies\Action\Sci-Fi"
             Test-Path $expectedDestDir | Should -BeTrue
+            
+            # File should be queued (directory creation happens in worker before probe)
+            $result.StdOut | Should -Match "\[QUEUE\]"
         }
     }
 }
@@ -190,6 +185,13 @@ Describe "S95C Converter with real media" -Tag "OptionalTooling" {
         # Skip entire describe block if ffmpeg/ffprobe not available
         $script:HasFFmpeg = Test-HasCommand -Name "ffmpeg"
         $script:HasFFprobe = Test-HasCommand -Name "ffprobe"
+        
+        # Check if DTS encoder (dca) is available
+        $script:HasDTSEncoder = $false
+        if ($script:HasFFmpeg) {
+            $encoders = & ffmpeg -hide_banner -encoders 2>&1
+            $script:HasDTSEncoder = $encoders -match "\bdca\b"
+        }
     }
     
     BeforeEach {
@@ -222,6 +224,7 @@ Describe "S95C Converter with real media" -Tag "OptionalTooling" {
             
             # Create 1-second silent video with AAC audio
             $ffmpegArgs = @(
+                "-hide_banner", "-loglevel", "error", "-nostdin",
                 "-f", "lavfi", "-i", "color=black:s=64x64:d=1",
                 "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
                 "-t", "1",
@@ -255,6 +258,222 @@ Describe "S95C Converter with real media" -Tag "OptionalTooling" {
             
             # Should indicate it was copied (not converted)
             $result.StdOut | Should -Match "(\[SKIP\]|\[OK\].*[Cc]opied)"
+        }
+    }
+    
+    Context "DTS to FLAC conversion" {
+        It "converts DTS audio to FLAC, no DTS remains" {
+            if (-not $script:HasDTSEncoder) {
+                Set-ItResult -Skipped -Because "DTS encoder (dca) not available in ffmpeg build"
+                return
+            }
+            
+            # Generate a tiny test MKV with DTS audio
+            $testMkv = Join-Path $script:SourceDir "dts-test.mkv"
+            
+            # Create 1-second video with DTS audio (dca encoder, requires -strict -2)
+            $ffmpegArgs = @(
+                "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-f", "lavfi", "-i", "color=black:s=64x64:d=1",
+                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                "-t", "1",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-c:a", "dca", "-b:a", "768k", "-strict", "-2",
+                "-y", $testMkv
+            )
+            
+            $proc = Start-Process -FilePath "ffmpeg" -ArgumentList $ffmpegArgs -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $script:Sandbox.Path "ffmpeg-create-dts.log")
+            
+            if ($proc.ExitCode -ne 0 -or -not (Test-Path $testMkv)) {
+                Set-ItResult -Skipped -Because "Failed to create DTS test MKV file"
+                return
+            }
+            
+            # Run the converter
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # Output file should exist and be non-zero
+            $outputMkv = Join-Path $script:DestDir "dts-test.mkv"
+            Test-Path $outputMkv | Should -BeTrue
+            (Get-Item $outputMkv).Length | Should -BeGreaterThan 0
+            
+            # Probe output with JSON to verify codecs
+            $probeJson = & ffprobe -hide_banner -loglevel error -print_format json -show_streams -select_streams a -i $outputMkv 2>&1
+            $probe = $probeJson | ConvertFrom-Json
+            
+            # Assert: no DTS or TrueHD audio streams remain
+            $audioCodecs = $probe.streams | ForEach-Object { $_.codec_name }
+            $audioCodecs | ForEach-Object {
+                $_ | Should -Not -Match "^dts"
+                $_ | Should -Not -Be "truehd"
+            }
+            
+            # Assert: at least one FLAC stream exists
+            $hasFlac = $audioCodecs -contains "flac"
+            $hasFlac | Should -BeTrue
+            
+            # Should indicate conversion happened
+            $result.StdOut | Should -Match "\[CONVERT\]"
+        }
+    }
+    
+    Context "Mixed streams conversion" {
+        It "AAC copied, DTS converted to FLAC" {
+            if (-not $script:HasDTSEncoder) {
+                Set-ItResult -Skipped -Because "DTS encoder (dca) not available in ffmpeg build"
+                return
+            }
+            
+            # Generate MKV with two audio streams: AAC + DTS
+            $testMkv = Join-Path $script:SourceDir "mixed-audio.mkv"
+            
+            # Create 1-second video with AAC (stream 0) and DTS (stream 1) audio
+            $ffmpegArgs = @(
+                "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-f", "lavfi", "-i", "color=black:s=64x64:d=1",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                "-t", "1",
+                "-map", "0:v", "-map", "1:a", "-map", "2:a",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-c:a:0", "aac",
+                "-c:a:1", "dca", "-b:a:1", "768k", "-strict", "-2",
+                "-y", $testMkv
+            )
+            
+            $proc = Start-Process -FilePath "ffmpeg" -ArgumentList $ffmpegArgs -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $script:Sandbox.Path "ffmpeg-create-mixed.log")
+            
+            if ($proc.ExitCode -ne 0 -or -not (Test-Path $testMkv)) {
+                Set-ItResult -Skipped -Because "Failed to create mixed audio test MKV file"
+                return
+            }
+            
+            # Run the converter
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # Output file should exist and be non-zero
+            $outputMkv = Join-Path $script:DestDir "mixed-audio.mkv"
+            Test-Path $outputMkv | Should -BeTrue
+            (Get-Item $outputMkv).Length | Should -BeGreaterThan 0
+            
+            # Probe output with JSON to verify codecs
+            $probeJson = & ffprobe -hide_banner -loglevel error -print_format json -show_streams -select_streams a -i $outputMkv 2>&1
+            $probe = $probeJson | ConvertFrom-Json
+            
+            # Collect audio codecs (order-independent assertions)
+            $audioCodecs = @($probe.streams | ForEach-Object { $_.codec_name })
+            
+            # Assert: no DTS or TrueHD audio streams remain
+            $audioCodecs | ForEach-Object {
+                $_ | Should -Not -Match "^dts"
+                $_ | Should -Not -Be "truehd"
+            }
+            
+            # Assert: should have exactly 2 audio streams
+            $audioCodecs.Count | Should -Be 2
+            
+            # Assert: one stream is AAC (copied) and one is FLAC (converted from DTS)
+            $hasAac = $audioCodecs -contains "aac"
+            $hasFlac = $audioCodecs -contains "flac"
+            $hasAac | Should -BeTrue -Because "AAC stream should be copied unchanged"
+            $hasFlac | Should -BeTrue -Because "DTS stream should be converted to FLAC"
+        }
+    }
+    
+    Context "Atomic temp file cleanup on failure" {
+        It "cleans up temp files when ffprobe fails on corrupt input" {
+            # The script copies files when ffprobe fails (no audio detected).
+            # This test verifies that corrupt files don't leave temp files behind.
+            # The script's temp file pattern is .tmp_*.mkv
+            
+            # Create a fake MKV file that will cause ffprobe to fail
+            $fakeMkv = Join-Path $script:SourceDir "corrupt.mkv"
+            # Write minimal bytes that look like MKV header but are invalid
+            [System.IO.File]::WriteAllBytes($fakeMkv, [byte[]](0x1A, 0x45, 0xDF, 0xA3, 0x00, 0x00, 0x00, 0x00))
+            
+            # Run the converter
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # No temp files matching .tmp_*.mkv should remain in destination
+            $tempFiles = Get-ChildItem -Path $script:DestDir -Filter ".tmp_*.mkv" -Recurse -ErrorAction SilentlyContinue
+            $tempFiles | Should -BeNullOrEmpty
+            
+            # When ffprobe fails to detect audio, the script copies the file
+            # (this is expected behavior - the file is treated as "no audio")
+            # The key assertion is that no temp files are left behind
+        }
+        
+        It "cleans up temp files when ffmpeg conversion fails" {
+            if (-not $script:HasDTSEncoder) {
+                Set-ItResult -Skipped -Because "DTS encoder (dca) not available in ffmpeg build"
+                return
+            }
+            
+            # Create a valid MKV with DTS audio, then corrupt it partially
+            # so ffprobe succeeds but ffmpeg conversion fails
+            $testMkv = Join-Path $script:SourceDir "partial-corrupt.mkv"
+            
+            # First create a valid DTS MKV
+            $ffmpegArgs = @(
+                "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-f", "lavfi", "-i", "color=black:s=64x64:d=1",
+                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                "-t", "1",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-c:a", "dca", "-b:a", "768k", "-strict", "-2",
+                "-y", $testMkv
+            )
+            
+            $proc = Start-Process -FilePath "ffmpeg" -ArgumentList $ffmpegArgs -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $script:Sandbox.Path "ffmpeg-create-partial.log")
+            
+            if ($proc.ExitCode -ne 0 -or -not (Test-Path $testMkv)) {
+                Set-ItResult -Skipped -Because "Failed to create test MKV file"
+                return
+            }
+            
+            # Truncate the file to corrupt it (keep header intact so ffprobe works)
+            $bytes = [System.IO.File]::ReadAllBytes($testMkv)
+            $truncatedBytes = $bytes[0..([Math]::Min(2000, $bytes.Length - 1))]
+            [System.IO.File]::WriteAllBytes($testMkv, $truncatedBytes)
+            
+            # Run the converter
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # No temp files matching .tmp_*.mkv should remain in destination
+            $tempFiles = Get-ChildItem -Path $script:DestDir -Filter ".tmp_*.mkv" -Recurse -ErrorAction SilentlyContinue
+            $tempFiles | Should -BeNullOrEmpty
+            
+            # Final output file should NOT exist (conversion failed)
+            $outputMkv = Join-Path $script:DestDir "partial-corrupt.mkv"
+            Test-Path $outputMkv | Should -BeFalse
+            
+            # Script should report failure
+            $result.ExitCode | Should -Be 1
+            $result.StdOut | Should -Match "\[ERROR\]"
         }
     }
 }
