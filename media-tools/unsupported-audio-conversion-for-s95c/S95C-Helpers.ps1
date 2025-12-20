@@ -23,6 +23,7 @@ function Test-UnsupportedCodec {
     param(
         [Parameter(Mandatory = $true)]
         [AllowEmptyString()]
+        [AllowNull()]
         [string]$CodecName
     )
     
@@ -30,9 +31,12 @@ function Test-UnsupportedCodec {
         return $false
     }
     
+    # Normalize: trim whitespace and lowercase
+    $normalized = $CodecName.Trim().ToLowerInvariant()
+    
     # DTS variants: dts, dts-hd, dts_hd_ma, etc.
     # TrueHD: truehd
-    return ($CodecName -match "^dts" -or $CodecName -eq "truehd")
+    return ($normalized -like "dts*" -or $normalized -eq "truehd")
 }
 
 <#
@@ -68,14 +72,28 @@ function Get-MirroredDestination {
         [string]$DestRoot
     )
     
-    # Normalize paths
-    $sourceRootNorm = $SourceRoot.TrimEnd("\", "/")
-    $destRootNorm = $DestRoot.TrimEnd("\", "/")
+    # Normalize paths: trim trailing slashes and normalize separators
+    $sourceRootNorm = $SourceRoot.TrimEnd("\", "/").Replace("/", "\")
+    $destRootNorm = $DestRoot.TrimEnd("\", "/").Replace("/", "\")
+    $sourceFileNorm = $SourceFilePath.TrimEnd("\", "/").Replace("/", "\")
     
-    $fileName = Split-Path -Path $SourceFilePath -Leaf
+    # Validate: source file must start with source root (case-insensitive on Windows)
+    if (-not $sourceFileNorm.StartsWith($sourceRootNorm, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "SourceFilePath '$SourceFilePath' is not under SourceRoot '$SourceRoot'"
+    }
     
-    # Compute relative path
-    $relativePath = $SourceFilePath.Substring($sourceRootNorm.Length) -replace "^[\\/]+", ""
+    # Compute relative path by removing source root prefix
+    $relativePath = $sourceFileNorm.Substring($sourceRootNorm.Length).TrimStart("\", "/")
+    
+    # Additional validation: reject if relative path is empty (file IS the root) or contains ..
+    if ([string]::IsNullOrEmpty($relativePath)) {
+        throw "SourceFilePath '$SourceFilePath' is not under SourceRoot '$SourceRoot'"
+    }
+    if ($relativePath.Contains("..")) {
+        throw "SourceFilePath '$SourceFilePath' is not under SourceRoot '$SourceRoot'"
+    }
+    
+    $fileName = Split-Path -Path $sourceFileNorm -Leaf
     $relDir = Split-Path -Path $relativePath -Parent
     
     # Compute destination directory
@@ -120,8 +138,8 @@ function Get-AudioCodecArgs {
         $codec = $AudioStreams[$i].codec_name
         
         if (Test-UnsupportedCodec -CodecName $codec) {
-            # Convert DTS/TrueHD to FLAC
-            $codecArgs += @("-c:a:$i", "flac", "-compression_level", "12")
+            # Convert DTS/TrueHD to FLAC with per-stream compression
+            $codecArgs += @("-c:a:$i", "flac", "-compression_level:a:$i", "12")
         } else {
             # Copy all other audio streams
             $codecArgs += @("-c:a:$i", "copy")
