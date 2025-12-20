@@ -73,13 +73,13 @@ Tests use **Pester v5** and require **Windows PowerShell 5.1** (`powershell.exe`
 
 ```powershell
 # From repo root - uses vendored Pester
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1)"
+.\tests\run-tests.ps1
 ```
 
 ### Run Integration Tests
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeIntegration)"
+.\tests\run-tests.ps1 -Integration
 ```
 
 ### Run Optional Tooling Tests
@@ -88,7 +88,22 @@ Tests requiring external tools (ffmpeg, ffprobe, yt-dlp) are tagged `OptionalToo
 
 ```powershell
 # Only if ffmpeg/ffprobe are installed
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeOptionalTooling)"
+.\tests\run-tests.ps1 -OptionalTooling
+```
+
+### Run All Tests
+
+```powershell
+.\tests\run-tests.ps1 -All
+```
+
+### Advanced: Direct Invoke-Pester Usage
+
+For manual configuration or CI integration, call `pester.config.ps1` directly:
+
+```powershell
+Invoke-Pester -Configuration (& .\pester.config.ps1)
+Invoke-Pester -Configuration (& .\pester.config.ps1 -IncludeIntegration)
 ```
 
 ---

@@ -15,15 +15,15 @@
 
 .EXAMPLE
     # Run unit tests only (default)
-    Invoke-Pester -Configuration (. .\pester.config.ps1)
+    Invoke-Pester -Configuration (& .\pester.config.ps1)
 
 .EXAMPLE
     # Include integration tests
-    Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeIntegration)
+    Invoke-Pester -Configuration (& .\pester.config.ps1 -IncludeIntegration)
 
 .EXAMPLE
     # Include optional tooling tests (requires ffmpeg/ffprobe)
-    Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeOptionalTooling)
+    Invoke-Pester -Configuration (& .\pester.config.ps1 -IncludeOptionalTooling)
 #>
 [CmdletBinding()]
 param(

@@ -37,6 +37,7 @@ automation-suite/
     ├── unit/               # Unit tests (no external deps)
     ├── integration/        # Integration tests
     ├── fixtures/           # Test fixtures
+    ├── run-tests.ps1       # Canonical test entrypoint
     └── TestHelpers.ps1     # Shared test utilities
 ```
 
@@ -73,15 +74,27 @@ Do NOT use PowerShell 7-only features:
 
 ### Running Tests
 
+**Primary entrypoint:** `tests/run-tests.ps1`
+
 ```powershell
 # Unit tests only (default, CI)
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1)"
+.\tests\run-tests.ps1
 
 # Include integration tests
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeIntegration)"
+.\tests\run-tests.ps1 -Integration
 
 # Include optional tooling tests (requires ffmpeg/ffprobe)
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeOptionalTooling)"
+.\tests\run-tests.ps1 -OptionalTooling
+
+# All tests
+.\tests\run-tests.ps1 -All
+```
+
+**Advanced/Manual:** Direct `Invoke-Pester` usage
+
+```powershell
+Invoke-Pester -Configuration (& .\pester.config.ps1)
+Invoke-Pester -Configuration (& .\pester.config.ps1 -IncludeIntegration)
 ```
 
 ### Test Helpers
