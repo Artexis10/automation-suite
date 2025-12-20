@@ -65,45 +65,41 @@ Get-ChildItem -Recurse -Filter *.ps1 | Unblock-File
 
 ---
 
-## Testing
+## Running Tests Locally
 
 Tests use **Pester v5** and require **Windows PowerShell 5.1** (`powershell.exe`).
 
-### Run Unit Tests (Default)
+### Install Pester 5
 
 ```powershell
-# From repo root - uses vendored Pester
-.\tests\run-tests.ps1
+Install-Module Pester -Scope CurrentUser -Force
 ```
 
-### Run Integration Tests
+### Run Tests
 
 ```powershell
-.\tests\run-tests.ps1 -Integration
+.\scripts\test.ps1
 ```
 
-### Run Optional Tooling Tests
+The script will:
+- Verify Pester >= 5 is available (vendored or installed)
+- Run all unit tests with detailed output
+- Return non-zero exit code on failure
 
-Tests requiring external tools (ffmpeg, ffprobe, yt-dlp) are tagged `OptionalTooling` and skipped by default.
+### Advanced Options
+
+For integration tests or tests requiring external tools (ffmpeg, ffprobe, yt-dlp):
 
 ```powershell
-# Only if ffmpeg/ffprobe are installed
-.\tests\run-tests.ps1 -OptionalTooling
+.\tests\run-tests.ps1 -Integration      # Include integration tests
+.\tests\run-tests.ps1 -OptionalTooling  # Include tests requiring external tools
+.\tests\run-tests.ps1 -All              # Run all tests
 ```
 
-### Run All Tests
-
-```powershell
-.\tests\run-tests.ps1 -All
-```
-
-### Advanced: Direct Invoke-Pester Usage
-
-For manual configuration or CI integration, call `pester.config.ps1` directly:
+For manual Pester configuration:
 
 ```powershell
 Invoke-Pester -Configuration (& .\pester.config.ps1)
-Invoke-Pester -Configuration (& .\pester.config.ps1 -IncludeIntegration)
 ```
 
 ---
