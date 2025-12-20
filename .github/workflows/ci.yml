@@ -14,22 +14,30 @@ on:
 
 jobs:
   test:
-    name: Unit Tests
+    name: Unit Tests (PS 5.1)
     runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run unit tests
-        shell: pwsh
+      - name: Install Pester v5
+        shell: powershell
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test_pester.ps1 -Path tests/unit
+          # Install Pester v5 to CurrentUser scope (no admin required)
+          Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run unit tests
+        shell: powershell
+        run: |
+          # Run tests using Windows PowerShell 5.1 with pester.config.ps1
+          $config = & .\pester.config.ps1
+          Invoke-Pester -Configuration $config
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: test-results.xml
+          path: tests/test-results.xml
           retention-days: 7

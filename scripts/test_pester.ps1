@@ -72,10 +72,9 @@ $testPaths = if ($Path) {
         @(Join-Path $script:RepoRoot $Path)
     }
 } else {
-    # Run both root-level tests and provisioning tests
+    # Run all tests under tests/
     @(
-        (Join-Path $script:RepoRoot "tests"),
-        (Join-Path $script:RepoRoot "provisioning\tests")
+        (Join-Path $script:RepoRoot "tests")
     ) | Where-Object { Test-Path $_ }
 }
 

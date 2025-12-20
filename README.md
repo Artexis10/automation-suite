@@ -10,27 +10,23 @@ A collection of automation tools and utilities for personal workflows.
 
 ---
 
-## Important: Provisioning Has Moved
+## Note: Provisioning Has Moved
 
-**The provisioning system has been split into a standalone repository: [Autosuite](https://github.com/Artexis10/autosuite)**
-
-If you're looking for machine provisioning and configuration management, use Autosuite instead. See [provisioning/README.md](provisioning/README.md) for migration details.
+The provisioning system is now maintained separately at **[Autosuite](https://github.com/Artexis10/autosuite)**.
 
 ---
 
 ## What's Here
 
-This repository contains various automation tools and utilities:
-
 ```
 automation-suite/
-├── backup-tools/              # File backup and integrity verification
-├── media-tools/               # Photo/video processing utilities
-├── podcast-tools/             # Podcast production helpers
-├── youtube-tools/             # YouTube content utilities
-├── archive-setup/             # Environment setup scripts
-├── tools/                     # Shared utilities
-└── tests/                     # Pester unit tests
+├── backup-tools/     # File backup and integrity verification
+├── media-tools/      # Photo/video processing utilities
+├── podcast-tools/    # Podcast production helpers
+├── youtube-tools/    # YouTube content utilities
+├── archive-setup/    # Environment setup scripts
+├── tools/            # Shared utilities (vendored Pester)
+└── tests/            # Pester unit/integration tests
 ```
 
 ---
@@ -53,7 +49,7 @@ See [TOOL-INDEX.md](TOOL-INDEX.md) for the complete script inventory.
 
 | Requirement | Version | Purpose |
 |-------------|---------|---------|
-| PowerShell | 5.1+ | Script execution |
+| PowerShell | 5.1+ | Script execution (Windows PowerShell required) |
 | ffmpeg / ffprobe | Latest | Media conversion (optional) |
 | yt-dlp | Latest | YouTube utilities (optional) |
 
@@ -69,21 +65,41 @@ Get-ChildItem -Recurse -Filter *.ps1 | Unblock-File
 
 ---
 
+## Testing
+
+Tests use **Pester v5** and require **Windows PowerShell 5.1** (`powershell.exe`).
+
+### Run Unit Tests (Default)
+
+```powershell
+# From repo root - uses vendored Pester
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1)"
+```
+
+### Run Integration Tests
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeIntegration)"
+```
+
+### Run Optional Tooling Tests
+
+Tests requiring external tools (ffmpeg, ffprobe, yt-dlp) are tagged `OptionalTooling` and skipped by default.
+
+```powershell
+# Only if ffmpeg/ffprobe are installed
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeOptionalTooling)"
+```
+
+---
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [provisioning/README.md](provisioning/README.md) | **Migration notice** — provisioning has moved to Autosuite |
 | [TOOL-INDEX.md](TOOL-INDEX.md) | Complete index of all scripts |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development conventions |
-
----
-
-## Status
-
-**Current:** Active — various automation tools for personal workflows.
-
-**Note:** The provisioning system has been split into the standalone [Autosuite](https://github.com/Artexis10/autosuite) repository.
+| [provisioning/README.md](provisioning/README.md) | Migration notice — provisioning moved to Autosuite |
 
 ---
 

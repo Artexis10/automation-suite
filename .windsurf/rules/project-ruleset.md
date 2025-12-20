@@ -8,87 +8,16 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ---
 
-## JSONC Manifest Support (Windows PowerShell 5.1+ Compatible)
+## Important: Provisioning Has Moved
 
-**All manifest and plan parsing in the provisioning engine supports JSONC (JSON with Comments).**
+**The provisioning system has been split into a standalone repository: [Autosuite](https://github.com/Artexis10/autosuite)**
 
-**Critical**: The JSONC parser is fully compatible with **Windows PowerShell 5.1** (stock Win11) and **PowerShell 7+**.
-
-### Canonical JSONC Loader
-
-The provisioning engine uses a single canonical function for all JSONC parsing:
-
-- **Function**: `Read-JsoncFile` in `provisioning/engine/manifest.ps1`
-- **Purpose**: Parse JSONC files with comment stripping (single-line `//` and multi-line `/* */`)
-- **Implementation**: PS5.1-safe state machine that preserves strings containing `//` (e.g., `"http://example.com"`)
-- **Depth**: Default 100 levels for deeply nested structures
-- **Compatibility**: Automatically detects PS version and uses appropriate parsing strategy
-
-### Comment Support
-
-JSONC files support:
-- **Single-line comments**: `// comment text`
-- **Multi-line comments**: `/* comment text */`
-- **Inline comments**: `"key": "value" // inline comment`
-
-Comments are stripped **only when outside JSON strings**, preserving URLs and other string content containing `//` or `/*`.
-
-### Implementation Details
-
-**Do NOT use `ConvertFrom-Json` directly for manifests/plans/state files. Always use `Read-JsoncFile`.**
-
-All code paths that parse manifests, plans, or state files use `Read-JsoncFile`:
-- Manifest loading (`Read-Manifest`, `Read-ManifestRaw`)
-- Plan file loading (`Invoke-ApplyFromPlan`)
-- State file loading (`Read-StateFile`)
-- Artifact file loading (`Read-ArtifactFile`)
-
-The parser uses a state machine that:
-1. Tracks whether we're inside a JSON string
-2. Handles escape sequences (`\"`, `\\`)
-3. Strips `//` and `/* */` only outside strings
-4. Preserves CRLF/LF line endings
-5. Converts PSCustomObject to hashtable on PS5.1
-
-### PowerShell Version Compatibility
-
-| Version | Status | Notes |
-|---------|--------|-------|
-| Windows PowerShell 5.1 | ✅ Fully Supported | Uses `New-Object System.Text.StringBuilder` and `Convert-PsObjectToHashtable` |
-| PowerShell 7+ | ✅ Fully Supported | Uses `ConvertFrom-Json -AsHashtable` directly |
-
-### Testing
-
-Regression tests in `provisioning/tests/unit/Manifest.Tests.ps1` verify:
-- Header comments (lines 2-6) parse correctly (fixes "Invalid object passed in, ':' or '}' expected. (6)")
-- Inline comments after values work
-- Multi-line `/* */` comments are stripped properly
-- Strings containing `http://` URLs are preserved
-- CRLF line endings are handled correctly
-- Tests run on both PS5.1 and PS7+
-- Real manifests like `fixture-test.jsonc` and `hugo-desktop.jsonc` load successfully
-
-------
-trigger: always
----
-
-# Automation Suite Project Ruleset
-
-This ruleset governs development and operation of the Automation Suite repository.
-
----
-
-## Glossary
-
-| Term | Definition |
-|------|------------|
-| **Manifest** | Declarative JSONC/JSON/YAML file describing desired machine state (apps, configs, verifications) |
-| **Plan** | Generated execution steps derived from a manifest, showing exactly what will happen |
-| **State** | Persistent record of previous runs, applied manifests, and checksums for drift detection |
-| **Driver** | Platform-specific adapter for installing software (e.g., winget, apt, brew) |
-| **Restorer** | Module that applies configuration (copy files, merge JSON/INI, append lines) |
-| **Verifier** | Module that confirms desired state is achieved (file exists, command responds, hash matches) |
-| **Report** | JSON artifact summarizing a run: what was intended, applied, skipped, and failed |
+This repository (`automation-suite`) now contains only:
+- Backup tools
+- Media processing utilities
+- YouTube tools
+- Podcast tools
+- Archive setup scripts
 
 ---
 
@@ -96,994 +25,130 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ```
 automation-suite/
-├── autosuite.ps1           # Root orchestrator CLI (primary entrypoint)
-├── tests/                  # Root-level Pester tests
-│   └── unit/
 ├── backup-tools/           # File backup and integrity verification
 ├── media-tools/            # Photo/video processing utilities
 ├── podcast-tools/          # Podcast production helpers
 ├── youtube-tools/          # YouTube content utilities
 ├── archive-setup/          # Environment and archive setup scripts
-├── provisioning/           # Machine provisioning system
-│   ├── cli.ps1             # CLI entrypoint
-│   ├── engine/             # Core logic (manifest, plan, apply, verify, state, logging)
-│   ├── modules/            # Config module catalog
-│   │   └── apps/           # App-specific config modules (module.jsonc)
-│   ├── drivers/            # Software installers (winget.ps1)
-│   ├── restorers/          # Config restoration (copy, merge-json, merge-ini, append)
-│   ├── verifiers/          # State verification (file-exists)
-│   ├── manifests/          # User manifest files
-│   │   ├── includes/       # Template and modular manifest includes
-│   │   ├── local/          # Machine-specific captures (gitignored)
-│   │   └── fixture-test.jsonc  # Deterministic test fixture (committed)
-│   ├── plans/              # Generated execution plans
-│   ├── state/              # Run history and checksums
-│   ├── logs/               # Execution logs
-│   └── tests/              # Pester tests
-├── scripts/                # Cross-cutting scripts
-│   └── test_pester.ps1     # Root test runner
-├── HashAll.ps1             # (Stub) SHA256 checksums
-├── CompareHashes.ps1       # (Stub) Compare checksums
-└── New-TripView.ps1        # (Stub) Trip view structure
+├── provisioning/           # STUB ONLY - migration notice to Autosuite
+├── scripts/                # Test runner scripts
+├── tools/                  # Vendored dependencies (Pester)
+└── tests/                  # Pester tests
+    ├── unit/               # Unit tests (no external deps)
+    ├── integration/        # Integration tests
+    ├── fixtures/           # Test fixtures
+    └── TestHelpers.ps1     # Shared test utilities
 ```
-
-### Subsystem Status
-
-| Subsystem | Status | Location |
-|-----------|--------|----------|
-| Autosuite Root Orchestrator | Functional | `autosuite.ps1` |
-| Provisioning CLI | Functional | `provisioning/cli.ps1` |
-| Manifest parsing (JSONC/JSON/YAML) | Functional | `provisioning/engine/manifest.ps1` |
-| Plan generation | Functional | `provisioning/engine/plan.ps1` |
-| Apply execution | Functional | `provisioning/engine/apply.ps1` |
-| Capture (winget export) | Functional | `provisioning/engine/capture.ps1` |
-| Verify | Functional | `provisioning/engine/verify.ps1` |
-| State persistence | Functional | `provisioning/engine/state.ps1` |
-| Logging | Functional | `provisioning/engine/logging.ps1` |
-| Winget driver | Functional | `provisioning/drivers/winget.ps1` |
-| Restorers (copy, merge, append) | Functional | `provisioning/restorers/` |
-| Verifiers | Functional | `provisioning/verifiers/` |
-| apt/dnf/brew drivers | Planned | `provisioning/drivers/` |
-| Backup Tools | Functional | `backup-tools/` |
-| Media Tools | Functional | `media-tools/` |
-| Podcast Tools | Functional | `podcast-tools/` |
-| YouTube Tools | Functional | `youtube-tools/` |
 
 ---
 
-## Design Principles
+## PowerShell Compatibility
 
-### 1. Platform-Agnostic
-Manifests express intent, not OS-specific commands. Drivers adapt intent to the platform.
+**All code must be compatible with Windows PowerShell 5.1** (`powershell.exe`).
 
-### 2. Idempotent by Default
-Re-running any operation must:
-- Converge to the same result
-- Never duplicate work
-- Never corrupt existing state
-- Log what was skipped and why
-
-### 3. Non-Destructive + Safe
-- Defaults preserve original data
-- Backups created before overwrites
-- Destructive operations require explicit opt-in flags
-- No secrets auto-exported (sensitive paths excluded from capture)
-
-### 4. Declarative Desired State
-Describe *what should be true*, not imperative steps. The system decides how to reach that state.
-
-### 5. Separation of Concerns
-- **Drivers** install software
-- **Restorers** apply configuration
-- **Verifiers** prove correctness
-- No step silently assumes success
-
-### 6. First-Class Verification
-Every meaningful action must be verifiable. "It ran" is not success—success means the desired state is observable.
-
-### 7. Deterministic Output
-- Stable manifest hashing (16-char SHA256 prefix)
-- Stable key ordering in JSON reports
-- Reproducible plans given same inputs
-- Capture output sorted alphabetically by app id
+Do NOT use PowerShell 7-only features:
+- No `??` null-coalescing operator
+- No `?.` null-conditional operator
+- No `ForEach-Object -Parallel`
+- No `$PSStyle`
+- No ternary operator `? :`
 
 ---
 
+## Testing
 
+### Test Framework
 
-## Bootstrap Installation
+- **Pester v5.7.1** (vendored in `tools/pester/`)
+- Tests run under **Windows PowerShell 5.1**
+- Configuration via `pester.config.ps1`
 
-Autosuite can be installed to your user PATH for convenient access from any directory.
+### Test Categories
 
-### Install to PATH
-
-```powershell
-# Install autosuite command to user PATH (idempotent)
-.\autosuite.ps1 bootstrap
-
-# Install with explicit repo root path
-.\autosuite.ps1 bootstrap -RepoRoot C:\Users\hugoa\Desktop\Projects\automation-suite
-```
-
-This command:
-- Creates `%LOCALAPPDATA%\Autosuite\bin` directory
-- Installs the CLI entrypoint (`autosuite.ps1`) to that directory
-- Creates `autosuite.cmd` shim that forwards all arguments to PowerShell
-- Adds the bin directory to user PATH if not already present
-- **Persists repo root path** to `%LOCALAPPDATA%\Autosuite\repo-root.txt` for profile resolution
-- Auto-detects repo root if `-RepoRoot` not provided (searches for `.git` or `provisioning\manifests`)
-- Is fully idempotent (safe to run multiple times)
-
-After bootstrap completes, you can run `autosuite --help` from any directory.
-
-**Note:** You may need to restart your terminal for PATH changes to take effect.
-
-### Repo Root Configuration
-
-The repo root is used to resolve `-Profile` arguments to manifest paths. Priority order:
-
-1. **`$env:AUTOSUITE_ROOT`** - Environment variable override (highest priority)
-2. **`%LOCALAPPDATA%\Autosuite\repo-root.txt`** - Persisted during bootstrap
-3. **`$PSScriptRoot`** - Fallback when running from repo directory
-
-If repo root is not configured, profile resolution will fail with a helpful error message.
-
-**Examples:**
-
-```powershell
-# Set environment variable (session-specific)
-$env:AUTOSUITE_ROOT = "C:\Users\hugoa\Desktop\Projects\automation-suite"
-
-# Or bootstrap with explicit path (persisted)
-autosuite bootstrap -RepoRoot C:\Users\hugoa\Desktop\Projects\automation-suite
-
-# Then use profiles from anywhere
-autosuite apply -Profile hugo-win11
-autosuite verify -Profile hugo-win11
-```
----
-## How to Run
-
-### Autosuite Commands (Primary Entrypoint)
-
-#### Capture → Apply → Verify Loop
-
-```powershell
-# CAPTURE: Export current machine state to local manifest (gitignored)
-.\autosuite.ps1 capture
-# Output: provisioning/manifests/local/<machine>.jsonc
-
-# Capture to specific path
-.\autosuite.ps1 capture -Out my-manifest.jsonc
-
-# Generate sanitized example manifest (no machine/timestamps)
-.\autosuite.ps1 capture -Example
-
-# APPLY: Install apps from manifest
-.\autosuite.ps1 apply -Manifest provisioning/manifests/fixture-test.jsonc
-
-# Preview what would be installed (dry-run)
-.\autosuite.ps1 apply -Manifest manifest.jsonc -DryRun
-
-# Install apps only (skip auto-verify at end)
-.\autosuite.ps1 apply -Manifest manifest.jsonc -OnlyApps
-
-# VERIFY: Check all apps are installed
-.\autosuite.ps1 verify -Manifest provisioning/manifests/fixture-test.jsonc
-# Exit code: 0 = all installed, 1 = missing apps
-
-# Other commands
-.\autosuite.ps1 report -Latest
-.\autosuite.ps1 doctor
-```
-
-#### Manifest Policy
-
-| Path | Purpose |
-|------|---------|
-| `provisioning/manifests/fixture-test.jsonc` | Committed test fixture (deterministic) |
-| `provisioning/manifests/local/` | Machine-specific captures (gitignored) |
-
-#
-
-### Provisioning CLI Path Resolution
-
-The utosuite command locates the provisioning CLI using repo root resolution:
-
-**Priority order:**
-1. AUTOSUITE_PROVISIONING_CLI environment variable (testing override)
-2. Repo root resolution:
-   - AUTOSUITE_ROOT environment variable
-   - %LOCALAPPDATA%\Autosuite\repo-root.txt (persisted during bootstrap)
-   - Fallback to $PSScriptRoot when running from repo
-
-**Behavior:**
-- capture command uses repo root to locate provisioning\cli.ps1
-- If repo root is not configured, fails with actionable error message
-- -Out paths in capture are resolved relative to current working directory
-
-**Configuration:**
-`powershell
-# Set via environment variable (session-specific)
-$env:AUTOSUITE_ROOT = "C:\path\to\automation-suite"
-
-# Or persist via bootstrap (recommended)
-autosuite bootstrap -RepoRoot C:\path\to\automation-suite
-`
-### Environment Variables for Testing
-
-| Variable | Description |
-|----------|-------------|
-| `AUTOSUITE_PROVISIONING_CLI` | Override path to provisioning CLI |
-| `AUTOSUITE_WINGET_SCRIPT` | Override winget with mock script for testing |
-
-### Provisioning Commands
-
-```powershell
-# Navigate to provisioning directory
-cd provisioning
-
-# Capture current machine state (profile-based, recommended)
-.\cli.ps1 -Command capture -Profile my-machine
-
-# Capture with templates for restore and verify
-.\cli.ps1 -Command capture -Profile my-machine -IncludeRestoreTemplate -IncludeVerifyTemplate
-
-# Capture with all apps (including runtimes and store apps)
-.\cli.ps1 -Command capture -Profile my-machine -IncludeRuntimes -IncludeStoreApps
-
-# Capture minimized (drop entries without stable refs)
-.\cli.ps1 -Command capture -Profile my-machine -Minimize
-
-# Capture with discovery mode (detect non-winget-managed software)
-.\cli.ps1 -Command capture -Profile my-machine -Discover
-
-# Capture with discovery but skip manual include generation
-.\cli.ps1 -Command capture -Profile my-machine -Discover -DiscoverWriteManualInclude $false
-
-# Update existing manifest (merge new apps, preserve includes/restore/verify)
-.\cli.ps1 -Command capture -Profile my-machine -Update
-
-# Update with pruning (remove apps no longer installed)
-# WARNING: This removes apps from root manifest that are not in new capture
-.\cli.ps1 -Command capture -Profile my-machine -Update -PruneMissingApps
-
-# Capture with config files from matched modules (v1.1)
-.\cli.ps1 -Command capture -Profile my-machine -WithConfig
-
-# Capture config from specific modules only
-.\cli.ps1 -Command capture -Profile my-machine -WithConfig -ConfigModules apps.git,apps.vscodium
-
-# Capture config to custom payload directory
-.\cli.ps1 -Command capture -Profile my-machine -WithConfig -PayloadOut .\my-payload
-
-# Generate a plan first, review it, then apply that exact plan
-.\cli.ps1 -Command plan -Manifest .\manifests\my-machine.jsonc
-# Review the plan in plans/<runId>.json, then:
-.\cli.ps1 -Command apply -Plan .\plans\<runId>.json
-
-# Apply from plan with dry-run preview
-.\cli.ps1 -Command apply -Plan .\plans\20251219-010000.json -DryRun
-
-# Capture to explicit path (legacy mode, backward compatible)
-.\cli.ps1 -Command capture -OutManifest .\manifests\my-machine.jsonc
-
-# Generate plan (preview what would happen)
-.\cli.ps1 -Command plan -Manifest .\manifests\my-machine.jsonc
-
-# Apply with dry-run (preview only)
-.\cli.ps1 -Command apply -Manifest .\manifests\my-machine.jsonc -DryRun
-
-# Apply for real
-.\cli.ps1 -Command apply -Manifest .\manifests\my-machine.jsonc
-
-# Verify current state matches manifest
-.\cli.ps1 -Command verify -Manifest .\manifests\my-machine.jsonc
-
-# Diagnose environment issues
-.\cli.ps1 -Command doctor
-
-# Compare two plan/run artifacts
-.\cli.ps1 -Command diff -FileA .\plans\run1.json -FileB .\plans\run2.json
-
-# Diff with JSON output
-.\cli.ps1 -Command diff -FileA .\plans\run1.json -FileB .\plans\run2.json -Json
-
-# Restore configuration files (requires explicit opt-in)
-.\cli.ps1 -Command restore -Manifest .\manifests\my-machine.jsonc -EnableRestore
-
-# Restore with dry-run preview
-.\cli.ps1 -Command restore -Manifest .\manifests\my-machine.jsonc -EnableRestore -DryRun
-
-# Apply with restore enabled (installs apps + restores configs)
-.\cli.ps1 -Command apply -Manifest .\manifests\my-machine.jsonc -EnableRestore
-# Show most recent run report (default)
-.\cli.ps1 -Command report
-
-# Show most recent run report (explicit)
-.\cli.ps1 -Command report -Latest
-
-# Show specific run by ID
-.\cli.ps1 -Command report -RunId 20251219-013701
-
-# Show last 5 runs (compact list)
-.\cli.ps1 -Command report -Last 5
-
-# Output report as JSON (machine-readable)
-.\cli.ps1 -Command report -Json
-
-# Show specific run as JSON
-.\cli.ps1 -Command report -RunId 20251219-013701 -Json
-```
-
-### Capture Command Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-Profile <name>` | - | Profile name; writes to `manifests/<name>.jsonc` |
-| `-OutManifest <path>` | - | Explicit output path (overrides -Profile) |
-| `-IncludeRuntimes` | false | Include runtime packages (VCRedist, .NET, UI.Xaml, etc.) |
-| `-IncludeStoreApps` | false | Include Microsoft Store apps (msstore source or 9N*/XP* IDs) |
-| `-Minimize` | false | Drop entries without stable refs (no windows ref) |
-| `-IncludeRestoreTemplate` | false | Generate `./includes/<profile>-restore.jsonc` (requires -Profile) |
-| `-IncludeVerifyTemplate` | false | Generate `./includes/<profile>-verify.jsonc` (requires -Profile) |
-| `-Discover` | false | Enable discovery mode: detect software present but not winget-managed |
-| `-DiscoverWriteManualInclude` | true (when -Discover) | Generate `./includes/<profile>-manual.jsonc` with commented suggestions (requires -Profile) |
-| `-Update` | false | Merge new capture into existing manifest instead of overwriting |
-| `-PruneMissingApps` | false | With -Update, remove apps no longer present (root manifest only, never includes) |
-| `-WithConfig` | false | Capture config files from matched config modules into payload directory |
-| `-ConfigModules <list>` | - | Explicitly specify which config modules to capture (comma-separated, e.g., `apps.git,apps.vscodium`) |
-| `-PayloadOut <path>` | `provisioning/payload/` | Output directory for captured config payloads |
-| `-Plan` | - | Path to pre-generated plan file; mutually exclusive with -Manifest (apply command only) |
-
-### Report Command Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-Latest` | true | Show most recent run (default behavior) |
-| `-RunId <id>` | - | Show specific run by ID (mutually exclusive with -Latest/-Last) |
-| `-Last <n>` | - | Show N most recent runs in compact list format |
-| `-Json` | false | Output as machine-readable JSON (pure JSON to stdout, no wrapper text) |
-| `-Out <path>` | - | Write JSON to file (atomic write); requires `-Json` |
-
-### State Command Options
-
-| Subcommand | Options | Description |
-|------------|---------|-------------|
-| `reset` | - | Delete `.autosuite/state.json` (non-destructive) |
-| `export` | `-Out <path>` | Export state to file (atomic, valid schema even if empty) |
-| `import` | `-In <path>` | Import state from file |
-| | `[-Merge]` | (default) Merge incoming; newer timestamps win |
-| | `[-Replace]` | Replace entirely; backup existing to `.autosuite/backup/` first |
-
-### Vendored Pester Policy
-
-This repo values hermetic, deterministic, offline-capable tooling:
-
-- **Pester 5.7.1 is vendored** in `tools/pester/` and committed to the repository
-- Tests always use vendored Pester first, never global modules
-- `scripts/ensure-pester.ps1` prepends `tools/pester/` to `$env:PSModulePath`
-- If vendored Pester is missing, it bootstraps via: `Save-Module Pester -Path tools/pester -RequiredVersion 5.7.1`
+| Tag | Description | Default |
+|-----|-------------|---------|
+| (none) | Unit tests | Included |
+| `Integration` | Integration tests | Excluded |
+| `OptionalTooling` | Requires ffmpeg/ffprobe/yt-dlp | Excluded |
 
 ### Running Tests
 
 ```powershell
-# From repo root - run all Pester tests (recommended)
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1
+# Unit tests only (default, CI)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1)"
 
-# Run autosuite tests only
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path tests\unit
+# Include integration tests
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeIntegration)"
 
-# Run provisioning tests only
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path provisioning\tests
-
-# Run specific test file
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\test_pester.ps1 -Path tests\unit\Autosuite.Tests.ps1
+# Include optional tooling tests (requires ffmpeg/ffprobe)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Configuration (. .\pester.config.ps1 -IncludeOptionalTooling)"
 ```
 
-**Exit codes**: The test runner exits 0 on success, non-zero on failure.
+### Test Helpers
 
-### Test Environment Variables
+`tests/TestHelpers.ps1` provides:
+- `Get-RepoRoot` - Returns repository root path
+- `New-TestSandbox` - Creates unique temp directory for test isolation
+- `Test-HasCommand` - Checks if a command exists
+- `Invoke-ToolScript` - Runs a script in PS 5.1 subprocess with captured output
+- `Skip-IfMissingCommand` - Skips test if required command is missing
 
-| Variable | Description |
-|----------|-------------|
-| `AUTOSUITE_PROVISIONING_CLI` | Override path to provisioning CLI for testing. Used by autosuite tests to inject a mock CLI. |
+### Writing Tests
 
-### Test Infrastructure
-
-| File | Purpose |
-|------|---------|
-| `scripts/ensure-pester.ps1` | Ensures vendored Pester is available, prepends to PSModulePath |
-| `scripts/test_pester.ps1` | Main test runner - calls ensure-pester, runs Invoke-Pester -CI, exits non-zero on failures |
-| `tools/pester/` | **Vendored Pester 5.7.1 (committed)** - authoritative source for deterministic test execution |
-| `test-results.xml` | NUnit XML test results (gitignored) |
-
-### Other Scripts
-
-| Script | Command | Status |
-|--------|---------|--------|
-| Backup XMPs | `.\backup-tools\Backup-XMPs.ps1 -SourcePath <path>` | Functional |
-| Convert Audio | `.\media-tools\unsupported-audio-conversion-for-s95c\Convert-Unsupported-Audio-for-S95C.ps1` | Functional |
-| Export Podcast Tree | `.\podcast-tools\ExportPodcastTree.ps1` | Functional |
-| Download YouTube Chat | `.\youtube-tools\live-chat-downloader\download_chats_ytdlp.ps1` | Functional |
+1. Dot-source `TestHelpers.ps1` in `BeforeAll`
+2. Use `New-TestSandbox` for file operations
+3. Clean up sandbox in `AfterEach`
+4. Tag tests requiring external tools with `OptionalTooling`
+5. Use `Skip-IfMissingCommand` for graceful skipping
 
 ---
 
-## Engineering Discipline
+## CI (GitHub Actions)
 
-### Idempotency Requirements
-- Every operation must detect current state before acting
-- Skip actions when desired state already exists
-- Log skipped actions with reason: `[SKIP] <item> - already installed`
-- Drift detection: compare current state hash against last-run state
+Location: `.github/workflows/ci.yml`
 
-### Backup Policy
-- Restorers must backup existing files before overwriting
-- Backup location: `provisioning/state/backups/<runId>/`
-- Backup format: original path structure preserved
+### CI Configuration
 
-### Security
-- No secrets auto-exported during capture
-- Sensitive paths excluded: `.ssh`, `.aws`, `.azure`, `Credentials`
-- API keys never hardcoded; use environment variables
-- Warn user when sensitive paths detected
+- **Runner:** `windows-latest`
+- **Shell:** `powershell` (Windows PowerShell 5.1)
+- **Tests:** Unit tests only (Integration and OptionalTooling excluded)
+- **Output:** `tests/test-results.xml` (NUnit format)
 
-### Testing Requirements
-- Mock all external calls (winget, network) in tests
-- No real installs in CI/tests
-- Tests must be deterministic and idempotent
-- Use fixtures in `provisioning/tests/fixtures/`
+### CI Triggers
 
-### Deterministic Output
-- Manifest hash: 16-character SHA256 prefix
-- RunId format: `yyyyMMdd-HHmmss`
-- JSON reports: ordered keys (runId, timestamp, manifest, summary, actions)
-- Plans reproducible given same manifest + installed state
-- Capture apps sorted alphabetically by id
+- Push to `main`
+- Pull requests to `main`
+- Excludes: `**/*.md`, `docs/**`
 
-### Logging + Reports
-- All runs produce logs in `provisioning/logs/<runId>.log`
-- Reports saved as JSON in `provisioning/state/runs/<runId>.json`
-- Report schema: `runId`, `timestamp`, `manifest`, `summary`, `actions`
-- Human-readable console output with color coding
+---
+
+## Tools
+
+| Folder | Purpose | Dependencies |
+|--------|---------|--------------|
+| `backup-tools/` | XMP backup, hash generation | robocopy (built-in) |
+| `media-tools/` | Audio/video conversion | ffmpeg, ffprobe (optional) |
+| `podcast-tools/` | Podcast folder export | tree (built-in) |
+| `youtube-tools/` | Live chat download | yt-dlp, chat_downloader (optional) |
+| `archive-setup/` | Archive folder setup | None |
 
 ---
 
 ## Change Management
 
 ### Ruleset Sync
+
 If any of the following change, update this ruleset in the same commit:
-- CLI commands or parameters
-- Environment variables
+- Test commands or configuration
+- CI workflow
 - Directory structure
-- New drivers/restorers/verifiers
-- Test commands
-
-### Destructive Operations
-- Restore is opt-in: requires `-EnableRestore` flag
-- Backups stored in `provisioning/state/backups/<runId>/` preserving path structure
-- Sensitive paths (.ssh, .aws, credentials, etc.) trigger warnings
-- Must be explicitly opt-in (require flags like `-Force` or `-Confirm`)
-- Must log clearly: `[DESTRUCTIVE] <action>`
-- Must backup before proceeding
-
-### Reboot Markers
-- Operations requiring reboot must set `requiresReboot: true` in plan/report
-- CLI must warn user at end of run if reboot required
-- Planned: `--reboot-if-needed` flag (not implemented yet)
-
-
-## Documentation Naming Conventions
-
-To ensure consistency, clarity, and cross-platform safety, Automation Suite enforces the following Markdown filename conventions:
-
-### Canonical Documents (UPPERCASE)
-
-Project-level, canonical entry-point documents MUST use uppercase filenames:
-
-- README.md
-- VISION.md
-- CONTRIBUTING.md
-- LICENSE
-- SECURITY.md
-- CHANGELOG.md
-
-These files define project intent, governance, or orientation and are treated as authoritative.
-
-### Supporting Documentation (lowercase)
-
-All non-canonical documentation MUST use lowercase filenames, including:
-
-- docs/**/*.md
-- tool-specific documentation
-- conceptual, lifecycle, or reference materials
-
-Lowercase filenames are preferred for ease of linking, URL compatibility, and reduced filesystem friction.
-
-### General Rules
-
-- Do NOT mix casing styles (e.g. Readme.md, Vision.md)
-- Do NOT rename files back and forth purely for casing
-- Consistency takes precedence over personal preference
+- New test categories or tags
 
 ---
 
-## Manifest Format (v1)
-
-Supported formats: `.jsonc` (preferred), `.json`, `.yaml`, `.yml`
-
-```jsonc
-{
-  "version": 1,
-  "name": "my-workstation",
-  "captured": "2025-01-01T00:00:00Z",
-  
-  "includes": [
-    "./includes/my-workstation-restore.jsonc",
-    "./includes/my-workstation-verify.jsonc"
-  ],
-  
-  "apps": [
-    {
-      "id": "vscode",
-      "refs": {
-        "windows": "Microsoft.VisualStudioCode",
-        "linux": "code",
-        "macos": "visual-studio-code"
-      }
-    }
-  ],
-  
-  "restore": [
-    // Copy: simple file/directory copy
-    { "type": "copy", "source": "./configs/.gitconfig", "target": "~/.gitconfig", "backup": true },
-    
-    // JSON merge: deep-merge objects, arrays replace by default
-    {
-      "type": "merge",
-      "format": "json",
-      "source": "./state/capture/vscode/settings.json",
-      "target": "$env:APPDATA/Code/User/settings.json",
-      "backup": true,
-      "arrayStrategy": "replace"  // or "union" for deterministic union
-    },
-    
-    // INI merge: merge sections and keys
-    {
-      "type": "merge",
-      "format": "ini",
-      "source": "./state/capture/app/config.ini",
-      "target": "$env:PROGRAMFILES/App/config.ini",
-      "backup": true
-    },
-    
-    // Append: add missing lines (idempotent)
-    {
-      "type": "append",
-      "source": "./state/capture/gitconfig-extra.txt",
-      "target": "~/.gitconfig",
-      "backup": true,
-      "dedupe": true  // default: true
-    }
-  ],
-  
-  "verify": [
-    { "type": "file-exists", "path": "~/.gitconfig" }
-  ]
-}
-```
-
-
-### Config Modules (v1.1)
-
-Config modules provide reusable restore/verify/capture configurations for applications.
-
-**Location:** `provisioning/modules/apps/<app>/module.jsonc`
-
-**Manifest Field:**
-```jsonc
-{
-  "configModules": ["apps.git", "apps.vscodium"]
-}
-```
-
-**Module Schema (v1.1):**
-```jsonc
-{
-  "id": "apps.git",
-  "displayName": "Git",
-  "sensitivity": "low",  // low | sensitive | machineBound
-  "matches": {
-    "winget": ["Git.Git"],
-    "exe": ["git.exe"],
-    "uninstallDisplayName": ["^Git\\b"]
-  },
-  "verify": [
-    { "type": "command-exists", "command": "git" },
-    { "type": "file-exists", "path": "~/.gitconfig" }
-  ],
-  "restore": [
-    { "type": "copy", "source": "./payload/apps/git/.gitconfig", "target": "~/.gitconfig", "backup": true }
-  ],
-  "capture": {
-    "files": [
-      { "source": "~/.gitconfig", "dest": "apps/git/.gitconfig", "optional": true },
-      { "source": "~/.gitattributes", "dest": "apps/git/.gitattributes", "optional": true }
-    ],
-    "excludeGlobs": ["**\\Cache\\**", "**\\GPUCache\\**"]  // optional
-  }
-}
-```
-
-**Capture Section (v1.1):**
-- `capture.files[]` - Array of file mappings to capture
-  - `source` - Source path (supports `~`, `%APPDATA%`, env vars)
-  - `dest` - Relative destination path inside payload directory
-  - `optional` - If true, skip silently when source missing (default: false)
-- `capture.excludeGlobs[]` - Optional glob patterns to exclude (e.g., cache directories)
-
-**Capture Command:**
-```powershell
-# Capture config files from matched modules (uses discovery)
-.\cli.ps1 -Command capture -Profile my-machine -WithConfig
-
-# Capture from specific modules
-.\cli.ps1 -Command capture -Profile my-machine -WithConfig -ConfigModules apps.git,apps.vscodium
-
-# Custom payload output directory
-.\cli.ps1 -Command capture -Profile my-machine -WithConfig -PayloadOut .\my-payload
-```
-
-**Default Payload Output:** `provisioning/payload/`
-
-**Behavior:**
-- When a manifest has `configModules`, the engine expands them into `restore[]` and `verify[]` items
-- Expansion happens after includes are resolved, before apply/verify executes
-- Unknown module IDs cause a clear error listing available modules
-- Expanded items are marked with `_fromModule` for traceability
-
-**Discovery Integration:**
-- `capture --discover` shows available config modules for detected apps
-- Matching uses winget IDs, exe names in PATH, and registry uninstall display names
-
-**Manifest Hashing Semantics:**
-
-Two hash functions are available for different use cases:
-
-| Function | Computes | Use Case |
-|----------|----------|----------|
-| `Get-ManifestHash` | SHA256 of raw file bytes on disk | File change detection, cache invalidation |
-| `Get-ExpandedManifestHash` | SHA256 of normalized expanded JSON | Drift detection, state comparison |
-
-**Behavior:**
-- **Raw hash** reflects the source file content exactly (comments, whitespace, ordering)
-- **Expanded hash** reflects the effective desired state after:
-  - Includes are resolved and merged
-  - configModules are expanded into restore/verify items
-  - Internal fields (prefixed with `_`) are excluded
-  - Keys are sorted for deterministic output
-
-**Recommendation:** Use `Get-ExpandedManifestHash` for drift detection when configModules are in use, as it captures the actual executed configuration.
-
-**Seed Modules:**
-- `apps.git` - Git (verify: git command, ~/.gitconfig; capture: .gitconfig, .gitattributes)
-- `apps.vscodium` - VSCodium (verify: codium command, settings.json; capture: settings.json, keybindings.json)
-### Restore Types
-
-| Type | Format | Description |
-|------|--------|-------------|
-| `copy` | - | Simple file/directory copy (default) |
-| `merge` | `json` | Deep-merge JSON/JSONC files; sorted keys for determinism |
-| `merge` | `ini` | Merge INI sections/keys; preserves keys not in source |
-| `append` | - | Append missing lines to text file; idempotent with dedupe |
-
-### Merge Behavior
-
-**JSON merge:**
-- Objects: deep-merge recursively
-- Arrays: `replace` (default) or `union` (deterministic)
-- Scalars: source overwrites target
-- Output: sorted keys, 2-space indent
-
-**INI merge:**
-- Keys from source overwrite/add into target
-- Existing keys not in source are preserved
-- Comments are NOT preserved (v1 limitation)
-
-**Append:**
-- Adds lines from source not already in target
-- `dedupe: true` (default) removes duplicates
-- Idempotent: re-run produces same result
-
----
-
-## Not Yet Implemented
-
-The following are planned but not yet functional:
-
-- **apt/dnf/brew drivers** - Linux/macOS package managers
-- **Verifier modules** - Custom verification beyond file-exists
-- **Reboot handling** - Automatic reboot detection and `--reboot-if-needed`
-- **Rollback** - Undo last apply using backup state
-
----
-
-
----
-
-## Bundle C — Drivers + Version Constraints
-
-Bundle C introduces driver abstraction and version constraints for flexible app management.
-
-### New Manifest Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `apps[*].driver` | string | `"winget"` | Driver to use: `winget` or `custom` |
-| `apps[*].version` | string | (none) | Version constraint: exact `"1.2.3"` or minimum `">=1.2.3"` |
-| `apps[*].custom` | object | (none) | Custom driver configuration (required when `driver: "custom"`) |
-| `apps[*].custom.installScript` | string | - | Relative path to install script (must be under repo root) |
-| `apps[*].custom.detect` | object | - | Detection configuration |
-| `apps[*].custom.detect.type` | string | - | Detection type: `file` or `registry` |
-| `apps[*].custom.detect.path` | string | - | For `file` type: path to check (supports env vars) |
-| `apps[*].custom.detect.key` | string | - | For `registry` type: registry key path |
-| `apps[*].custom.detect.value` | string | - | For `registry` type: value name to check |
-
-### Example: Winget App with Version Constraint
-
-```jsonc
-{
-  "id": "git-git",
-  "refs": { "windows": "Git.Git" },
-  "version": ">=2.40.0"
-}
-```
-
-### Example: Custom Driver App
-
-```jsonc
-{
-  "id": "mytool",
-  "driver": "custom",
-  "custom": {
-    "installScript": "provisioning/installers/mytool.ps1",
-    "detect": {
-      "type": "file",
-      "path": "C:\\Program Files\\MyTool\\mytool.exe"
-    }
-  }
-}
-```
-
-### Version Constraint Behavior
-
-| Constraint | Example | Behavior |
-|------------|---------|----------|
-| Exact | `"1.2.3"` | Installed version must equal `1.2.3` |
-| Minimum | `">=1.2.3"` | Installed version must be `>= 1.2.3` |
-| None | (omit field) | Any version satisfies |
-
-**Verify behavior:**
-- Missing app → FAIL
-- Version unknown + constraint present → FAIL (CI-safe default)
-- Version violates constraint → FAIL (reported as version mismatch)
-
-**Apply behavior:**
-- Missing → install
-- Version mismatch (winget) → attempt upgrade
-- Version mismatch (custom) → report "manual intervention needed"
-
-### Custom Driver Security
-
-- Install scripts **must** be under the repository root
-- Path traversal attempts (e.g., `../../../malicious.ps1`) are rejected
-- Scripts are invoked via `pwsh -NoProfile -File <script>`
-
-### Stable Output Markers
-
-```
-[autosuite] Verify: OkCount=N MissingCount=N VersionMismatches=N ExtraCount=N
-[autosuite] Drift: Missing=N Extra=N VersionMismatches=N
-[autosuite] Apply: completed ExitCode=N
-[autosuite] Doctor: state=<present|absent> driftMissing=N driftExtra=N
-```
-
-### Backward Compatibility
-
-- Manifests without `driver` field default to `winget`
-- Manifests without `version` field skip version checking
-- Existing `refs.windows` format continues to work
-
-
----
-
-## Bundle D — Capture Sanitization + Examples Pipeline + Guardrails
-
-Bundle D introduces sanitization for shareable example manifests and guardrails to prevent accidental commits of machine-specific data.
-
-### New Capture Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-Sanitize` | false | Remove machine-specific fields, secrets, local paths; stable sort by app.id |
-| `-Name <string>` | - | Manifest name (used for filename when `-Sanitize`) |
-| `-ExamplesDir <path>` | `provisioning/manifests/examples/` | Custom examples directory |
-| `-Force` | false | Overwrite existing example manifests without prompting |
-| `-Out <path>` | - | Output path (overrides all defaults) |
-
-### Capture Behavior
-
-| Command | Output Path | Sanitized |
-|---------|-------------|-----------|
-| `autosuite capture` | `provisioning/manifests/local/<machine>.jsonc` | No |
-| `autosuite capture -Sanitize -Name foo` | `provisioning/manifests/examples/foo.jsonc` | Yes |
-| `autosuite capture -Sanitize` | `provisioning/manifests/examples/sanitized.jsonc` | Yes |
-| `autosuite capture -Out custom.jsonc` | `custom.jsonc` | No |
-
-### Sanitization Process
-
-When `-Sanitize` is enabled:
-1. **Removes** `captured` timestamp field
-2. **Removes** `machine` field if present
-3. **Removes** fields that look like secrets (password, token, apikey, etc.)
-4. **Removes** local user paths (`C:\Users\...`, `/home/...`, `/Users/...`)
-5. **Sorts** apps array by `id` for deterministic output
-6. **Initializes** empty `restore` and `verify` arrays
-
-### Directory Policy
-
-| Path | Purpose | Git Status |
-|------|---------|------------|
-| `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
-| `provisioning/manifests/examples/` | Sanitized shareable manifests | **Committed** |
-
-### Guardrails
-
-1. **Non-sanitized write protection**: Cannot write non-sanitized capture to examples directory
-   - Error: `Cannot write non-sanitized capture to examples directory`
-   - Solution: Use `-Sanitize` flag or choose different output path
-
-2. **Overwrite protection**: Cannot overwrite existing example manifest without `-Force`
-   - Error: `Example manifest already exists: <path>`
-   - Solution: Use `-Force` to overwrite
-
-### Canonical Commands
-
-`powershell
-# Default capture (machine-specific, gitignored)
-autosuite capture
-
-# Sanitized capture for sharing
-autosuite capture -Sanitize -Name example-windows-core
-
-# Apply example manifest (dry-run)
-autosuite apply -Manifest provisioning/manifests/examples/example-windows-core.jsonc -DryRun
-
-# Verify example manifest
-autosuite verify -Manifest provisioning/manifests/examples/example-windows-core.jsonc
-`
-
-### Stable Output Markers
-
-`
-[autosuite] Capture: starting...
-[autosuite] Capture: output path is <path>
-[autosuite] Capture: sanitization enabled
-[autosuite] Capture: completed (sanitized, N apps)
-[autosuite] Capture: BLOCKED - non-sanitized write to examples directory
-[autosuite] Capture: BLOCKED - example manifest exists, use -Force to overwrite
-`
-
----
-
-## Output Stream Hygiene (Bundle D.1)
-
-Stable wrapper lines are emitted via **Write-Information** (stream 6), not Write-Output or Write-Host.
-
-### Stream Usage Convention
-
-| Stream | Purpose | Capture |
-|--------|---------|---------|
-| **Information (6)** | Stable wrapper lines for automation/testing | `6>&1` |
-| **Host** | Cosmetic UI elements (colors, formatting) | Not captured |
-| **Success (1)** | Structured return objects from Core functions | Direct assignment |
-
-### Stable Wrapper Line Format
-
-`
-[autosuite] Capture: starting...
-[autosuite] Capture: output path is <path>
-[autosuite] Capture: completed
-[autosuite] Apply: starting with manifest <path>
-[autosuite] Apply: completed ExitCode=<n>
-[autosuite] Verify: checking manifest <path>
-[autosuite] Verify: OkCount=<n> MissingCount=<n> VersionMismatches=<n> ExtraCount=<n>
-[autosuite] Verify: PASSED|FAILED
-[autosuite] Drift: Missing=<n> Extra=<n> VersionMismatches=<n>
-[autosuite] Doctor: checking environment...
-[autosuite] Doctor: state=<present|absent> driftMissing=<n> driftExtra=<n>
-[autosuite] Doctor: completed
-[autosuite] Report: reading state...
-[autosuite] Report: completed|no state found
-[autosuite] State: resetting...
-[autosuite] State: reset completed|no state file to reset
-`
-
-### Capturing Stable Lines
-
-For automation or testing, capture the Information stream:
-
-`powershell
-# Capture Information stream to success stream
-$output = & .\autosuite.ps1 verify -Manifest manifest.jsonc 6>&1
-$outputStr = $output -join "`n"
-
-# Check for specific markers
-$outputStr | Should -Match "\[autosuite\] Verify: PASSED"
-`
-
-### Core Function Design
-
-Core functions (`*Core`) return **structured objects only**:
-- No `Write-Output` for wrapper lines
-- No `Write-Host` for stable markers
-- Return hashtables with `Success`, `ExitCode`, and command-specific fields
-
-CLI layer emits stable wrapper lines via `Write-Information -InformationAction Continue`.
 ## References
 
-- [provisioning/readme.md](../provisioning/readme.md) - Full provisioning architecture
-- [CONTRIBUTING.md](../CONTRIBUTING.md) - Development conventions
-- [ROADMAP.md](../ROADMAP.md) - Future development plans
-- [TOOL-INDEX.md](../TOOL-INDEX.md) - Complete script index
-
-
-
-
-
----
-
-## Continuous Integration (CI)
-
-GitHub Actions runs hermetic unit tests on:
-- Pull requests targeting `main`
-- Pushes to `main`
-
-**Docs-only changes do NOT trigger CI** (via `paths-ignore` for `**/*.md` and `docs/**`).
-
-### CI Workflow
-
-Location: `.github/workflows/ci.yml`
-
-### CI Command
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test_pester.ps1 -Path tests/unit
-```
-
-### CI Principles
-
-- **Hermetic**: No real winget installs; all external calls mocked
-- **Windows-first**: `runs-on: windows-latest`
-- **Cost-controlled**: `paths-ignore` prevents docs-only runs
-- **Vendored Pester**: Uses committed `tools/pester/` for deterministic execution
-
-### Output Stream Capture Policy
-
-Stable wrapper lines use Information stream (6). To capture in tests:
-
-```powershell
-$output = & .\autosuite.ps1 verify -Manifest foo.jsonc 6>&1
-```
-
-### Manifest Directory Policy
-
-| Path | Purpose | Git Status |
-|------|---------|------------|
-| `provisioning/manifests/local/` | Machine-specific captures | **Gitignored** |
-| `provisioning/manifests/examples/` | Sanitized shareable examples | **Committed** |
-| `provisioning/manifests/fixture-test.jsonc` | Deterministic test fixture | **Committed** |
-
-
-
-
+- [README.md](../../README.md) - Project overview
+- [TOOL-INDEX.md](../../TOOL-INDEX.md) - Complete script index
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Development conventions
+- [provisioning/README.md](../../provisioning/README.md) - Migration notice to Autosuite
