@@ -45,14 +45,15 @@ param(
     [string]$SourceRoot = ".",
     [string]$DestRoot   = ".\S95C_Converted",
     [switch]$Recurse,
+    [ValidateRange(1, 64)]
     [int]$MaxParallel   = 2
 )
 
 # Resolve roots to full paths
 $sourceResolved = Resolve-Path -LiteralPath $SourceRoot -ErrorAction SilentlyContinue
 if (-not $sourceResolved) {
-    Write-Host "[ERROR] Source path does not exist: $SourceRoot"
-    return
+    Write-Host "[ERROR] Source path does not exist: $SourceRoot" -ForegroundColor Red
+    exit 1
 }
 $sourceRootFull = $sourceResolved.Path.TrimEnd("\","/")
 
@@ -61,6 +62,22 @@ if ($destResolved) {
     $destRootFull = $destResolved.Path.TrimEnd("\","/")
 } else {
     $destRootFull = (New-Item -ItemType Directory -Path $DestRoot -Force).FullName.TrimEnd("\","/")
+}
+
+# Validate: DestRoot must not equal SourceRoot
+if ($sourceRootFull -ieq $destRootFull) {
+    Write-Host "[ERROR] DestRoot cannot be the same as SourceRoot: $destRootFull" -ForegroundColor Red
+    exit 1
+}
+
+# Validate: When -Recurse, DestRoot must not be inside SourceRoot (would cause infinite loop)
+if ($Recurse) {
+    $destNorm = $destRootFull.Replace("/", "\").TrimEnd("\")
+    $srcNorm = $sourceRootFull.Replace("/", "\").TrimEnd("\")
+    if ($destNorm.StartsWith($srcNorm + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "[ERROR] DestRoot '$destRootFull' is inside SourceRoot '$sourceRootFull'. This would cause infinite recursion." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Build Get-ChildItem args
@@ -103,8 +120,8 @@ Write-Host "========================================`n" -ForegroundColor Cyan
 # Resolve path to helpers (same directory as this script)
 $helpersPath = Join-Path -Path $PSScriptRoot -ChildPath "S95C-Helpers.ps1"
 if (-not (Test-Path -LiteralPath $helpersPath)) {
-    Write-Host "[ERROR] S95C-Helpers.ps1 not found at: $helpersPath"
-    return
+    Write-Host "[ERROR] S95C-Helpers.ps1 not found at: $helpersPath" -ForegroundColor Red
+    exit 1
 }
 
 # Worker scriptblock for background jobs
@@ -142,15 +159,20 @@ $worker = {
         return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Already exists"
     }
 
-    # Probe audio tracks
-    $probeJson = & ffprobe -v error -print_format json -show_streams -select_streams a "$in" 2>$null
+    # Probe audio tracks with safe path handling
+    $probeJson = $null
     $probe = $null
-    if ($probeJson) {
-        $probe = $probeJson | ConvertFrom-Json
+    try {
+        $probeJson = & ffprobe -hide_banner -loglevel error -print_format json -show_streams -select_streams a -i "$in" 2>&1
+        if ($LASTEXITCODE -eq 0 -and $probeJson) {
+            $probe = $probeJson | ConvertFrom-Json -ErrorAction Stop
+        }
+    } catch {
+        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe JSON parse failed: $($_.Exception.Message)"
     }
 
     # If no audio streams found, copy the file
-    if (-not $probeJson -or -not $probe.streams) {
+    if (-not $probe -or -not $probe.streams) {
         if ($in -ieq $out) {
             return New-Result -Status "SkippedExists" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Source equals destination"
         }
@@ -173,21 +195,43 @@ $worker = {
     # Use helper to build codec args
     $codecArgs = Get-AudioCodecArgs -AudioStreams $probe.streams
 
-    # Run ffmpeg conversion
-    & ffmpeg -i "$in" -map 0 -map_chapters 0 -c:v copy -c:s copy @codecArgs "$out" 2>$null
+    # Atomic output: write to temp file first, then rename on success
+    $tempFile = Join-Path -Path $destDir -ChildPath (".tmp_" + [System.Guid]::NewGuid().ToString("N") + ".mkv")
 
-    if ($LASTEXITCODE -ne 0) {
-        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffmpeg failed"
+    try {
+        # Run ffmpeg conversion with safer flags
+        & ffmpeg -hide_banner -loglevel error -nostdin -i "$in" -map 0 -map_chapters 0 -c:v copy -c:s copy @codecArgs "$tempFile" 2>&1 | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            # Clean up temp file on failure
+            if (Test-Path -LiteralPath $tempFile) {
+                Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+            }
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffmpeg failed (exit code: $LASTEXITCODE)"
+        }
+
+        # Quick verification: ensure no DTS/TrueHD in the output
+        $check = & ffprobe -hide_banner -loglevel error -select_streams a -show_entries stream=codec_name -of default=nw=1:nk=1 -i "$tempFile" 2>&1
+
+        if ($check -match "dts" -or $check -match "truehd") {
+            # Clean up temp file on verification failure
+            if (Test-Path -LiteralPath $tempFile) {
+                Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+            }
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unsupported audio still present after conversion"
+        }
+
+        # Atomic rename: move temp file to final destination
+        Move-Item -LiteralPath $tempFile -Destination $out -Force
+
+        return New-Result -Status "Converted" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "DTS/TrueHD to FLAC"
+    } catch {
+        # Clean up temp file on any error
+        if (Test-Path -LiteralPath $tempFile) {
+            Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+        }
+        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unexpected error: $($_.Exception.Message)"
     }
-
-    # Quick verification: ensure no DTS/TrueHD in the output
-    $check = & ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=nw=1:nk=1 "$out" 2>$null
-
-    if ($check -match "^dts" -or $check -match "^truehd") {
-        return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "Unsupported audio still present"
-    }
-
-    return New-Result -Status "Converted" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "DTS/TrueHD to FLAC"
 }
 
 # Helper to process job result and update counters
@@ -287,3 +331,8 @@ Write-Host "  - Converted:  $converted"
 Write-Host "  - Failed:     $failed"
 Write-Host "========================================`n" -ForegroundColor Cyan
 Write-Host "Output location: $destRootFull" -ForegroundColor Green
+
+# Exit with non-zero code if any failures occurred (for automation detection)
+if ($failed -gt 0) {
+    exit 1
+}

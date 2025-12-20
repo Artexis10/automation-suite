@@ -78,6 +78,71 @@ Describe "Convert-Unsupported-Audio-for-S95C.ps1" -Tag "Integration" {
             
             # Should report error about source path
             $result.StdOut | Should -Match "\[ERROR\].*Source path does not exist"
+            $result.ExitCode | Should -Be 1
+        }
+    }
+    
+    Context "Parameter validation" {
+        It "rejects DestRoot equal to SourceRoot" {
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:SourceDir
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            $result.StdOut | Should -Match "\[ERROR\].*DestRoot cannot be the same as SourceRoot"
+            $result.ExitCode | Should -Be 1
+        }
+        
+        It "rejects DestRoot inside SourceRoot with -Recurse" {
+            $nestedDest = Join-Path $script:SourceDir "output"
+            
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $nestedDest
+                    Recurse = $true
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            $result.StdOut | Should -Match "\[ERROR\].*inside SourceRoot.*infinite recursion"
+            $result.ExitCode | Should -Be 1
+        }
+        
+        It "allows DestRoot inside SourceRoot without -Recurse" {
+            $nestedDest = Join-Path $script:SourceDir "output"
+            
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $nestedDest
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # Should not error about recursion (no -Recurse flag)
+            $result.StdOut | Should -Not -Match "infinite recursion"
+            # May report no MKV files, which is fine
+        }
+        
+        It "rejects MaxParallel above 64" {
+            $result = Invoke-ToolScript `
+                -ScriptPath $script:ScriptPath `
+                -Arguments @{
+                    SourceRoot = $script:SourceDir
+                    DestRoot = $script:DestDir
+                    MaxParallel = 100
+                } `
+                -SandboxPath $script:Sandbox.Path
+            
+            # PowerShell ValidateRange should reject this - check all outputs for validation error
+            $hasError = ($result.ExitCode -ne 0) -or 
+                        ($result.StdErr -match "greater than the maximum") -or 
+                        ($result.StdOut -match "greater than the maximum")
+            $hasError | Should -BeTrue
         }
     }
     
