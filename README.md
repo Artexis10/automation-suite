@@ -114,6 +114,12 @@ Invoke-Pester -Configuration (& .\pester.config.ps1)
 
 ---
 
+## AI-Assisted Development
+
+This repository includes AI-facing infrastructure for deterministic, reviewable AI collaboration. See `docs/ai/`.
+
+---
+
 ## License
 
 Public repository. All rights reserved.
