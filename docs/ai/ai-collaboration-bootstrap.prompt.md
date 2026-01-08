@@ -49,6 +49,33 @@ Do not proceed until workspace is confirmed.
 
 ---
 
+PHASE 0.5 — CANONICAL SOURCE DISCOVERY (ENFORCED)
+
+Attempt to locate the canonical source repository "automation-suite":
+1. Search parent directories of the current workspace for a folder named
+   "automation-suite" that contains "docs/ai/".
+2. If not found, ask the user: "Canonical source not found automatically.
+   Provide the absolute path to the automation-suite repository, or press
+   Enter to use embedded fallback content."
+
+If a path is provided or discovered, validate that these files exist:
+- <CANONICAL>/docs/ai/ai-contract.template.md
+- <CANONICAL>/docs/ai/windsurf-project-ruleset.template.md
+
+If validation passes:
+- Set PROVISIONING_MODE = CANONICAL
+- Set CANONICAL_PATH = <resolved path>
+- Proceed to Phase 1.
+
+If validation fails:
+- Output exactly: "Canonical source not found or incomplete. Refusing to
+  bootstrap to avoid drift."
+- Ask exactly: "Proceed with embedded fallback content instead? (y/n)"
+  - If "n": STOP immediately.
+  - If "y": Set PROVISIONING_MODE = FALLBACK, proceed to Phase 1.
+
+---
+
 PHASE 1 — AI CONTRACT INSTALLATION
 
 Check if docs/ai/AI_CONTRACT.md exists.
@@ -58,9 +85,11 @@ If it exists:
 - Do not modify it.
 
 If it does not exist:
-- Ask: "No AI Contract found. Create docs/ai/AI_CONTRACT.md with the canonical
-  AI development contract? (y/n)"
-- If approved, create the file with the following content:
+- If PROVISIONING_MODE = CANONICAL:
+  - Copy <CANONICAL_PATH>/docs/ai/ai-contract.template.md to docs/ai/AI_CONTRACT.md verbatim.
+  - Output: "AI Contract created from canonical source."
+- If PROVISIONING_MODE = FALLBACK:
+  - Create docs/ai/AI_CONTRACT.md with the following embedded content:
 
 ---BEGIN AI_CONTRACT.md---
 # AI Development Contract
@@ -190,8 +219,13 @@ If it exists:
 - Do not modify it.
 
 If it does not exist:
-- Create .windsurf/rules/ directory if needed
-- Create the file with the following content:
+- Create .windsurf/rules/ directory if needed.
+- If PROVISIONING_MODE = CANONICAL:
+  - Copy <CANONICAL_PATH>/docs/ai/windsurf-project-ruleset.template.md to
+    .windsurf/rules/project-ruleset.md verbatim.
+  - Output: "Editor ruleset created from canonical source."
+- If PROVISIONING_MODE = FALLBACK:
+  - Create the file with the following embedded content:
 
 ---BEGIN project-ruleset.md---
 # Windsurf Project Ruleset
@@ -288,13 +322,16 @@ Output the following summary:
 
 "Bootstrap complete.
 
+Provisioning mode: [CANONICAL MODE | FALLBACK MODE]
+Canonical source: [<CANONICAL_PATH> | not available]
+
 Files created or reused:
-- docs/ai/AI_CONTRACT.md — [created | reused]
-- .windsurf/rules/project-ruleset.md — [created | reused]
+- docs/ai/AI_CONTRACT.md — [created from canonical | created from fallback | reused]
+- .windsurf/rules/project-ruleset.md — [created from canonical | created from fallback | reused]
 - docs/ai/PROJECT_SHADOW.md — [created | reused]
 
 This repository is now sovereign. The provisioning source (automation-suite)
-is no longer required. All AI governance artifacts are self-contained.
+is no longer required at runtime. All AI governance artifacts are self-contained.
 
 Commit these files to complete setup."
 
