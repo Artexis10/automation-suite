@@ -10,6 +10,19 @@ Producing "No Project Shadow update required" is a valid and successful outcome.
 
 ---
 
+## How to Use This Prompt
+
+1. Open a repo-aware AI agent with full repository access.
+2. Copy **only** the contents of the **Generator Prompt** section below
+   (the fenced block).
+3. Paste it as-is into the agent.
+4. Do not add additional instructions.
+5. Commit the generated `docs/ai/PROJECT_SHADOW.md` file.
+
+This prompt is designed to be self-contained.
+
+---
+
 ## Generator Prompt
 
 ```
