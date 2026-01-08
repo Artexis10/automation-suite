@@ -281,13 +281,30 @@ $worker = {
     Remove-ProgressFile -Path $progressFile
 
     # Probe audio tracks with safe path handling
-    $probeJson = $null
     $probe = $null
     try {
-        $probeJson = & ffprobe -hide_banner -loglevel error -print_format json -show_streams -select_streams a -i "$in" 2>&1
-        if ($LASTEXITCODE -eq 0 -and $probeJson) {
-            $probe = $probeJson | ConvertFrom-Json -ErrorAction Stop
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "ffprobe"
+        $psi.Arguments = "-hide_banner -loglevel error -print_format json -show_streams -select_streams a -i `"$in`""
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $stderr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+        
+        if ($proc.ExitCode -ne 0) {
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe failed: $($stderr.Trim())" -ProgressFile $null
         }
+        
+        if ([string]::IsNullOrWhiteSpace($stdout)) {
+            return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe returned empty output" -ProgressFile $null
+        }
+        
+        $probe = $stdout | ConvertFrom-Json -ErrorAction Stop
     } catch {
         return New-Result -Status "Failed" -RelativePath $relativePath -SourcePath $in -DestPath $out -Message "ffprobe JSON parse failed: $($_.Exception.Message)" -ProgressFile $null
     }
