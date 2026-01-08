@@ -17,7 +17,7 @@ Producing "No Project Shadow update required" is a valid and successful outcome.
    (the fenced block).
 3. Paste it as-is into the agent.
 4. Do not add additional instructions.
-5. Commit the generated `docs/ai/PROJECT_SHADOW.md` file.
+5. Review the Delta Shadow output and apply updates manually to `PROJECT_SHADOW.md`.
 
 This prompt is designed to be self-contained.
 

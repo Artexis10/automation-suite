@@ -181,6 +181,8 @@ AI collaborators operating in this repository must:
 
 PHASE 2 — EDITOR RULESET INSTALLATION
 
+This phase provisions the Windsurf editor adapter. Other editors may be supported via additional adapters in the future.
+
 Check if .windsurf/rules/project-ruleset.md exists.
 
 If it exists:
