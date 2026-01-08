@@ -9,6 +9,7 @@ This directory contains AI-facing infrastructure for deterministic, reviewable A
 | File | Purpose |
 |------|---------|
 | `ai-contract.template.md` | Single source of truth for AI behavior |
+| `project-rules.template.md` | Operational policy template (env, tooling, protected areas) |
 | `PROTOCOL.md` | Explanatory guide to the governance system |
 
 ### Provisioning
@@ -23,8 +24,10 @@ This directory contains AI-facing infrastructure for deterministic, reviewable A
 |------|---------|
 | `shadow-generator.prompt.md` | Canonical prompt for generating Project Shadows |
 | `shadow-delta-generator.prompt.md` | Canonical prompt for generating Delta Shadows |
-| `shadow-spec.md` | Specification defining what a Project Shadow is |
+| `delta-shadow.template.md` | Template for Delta Shadow format |
+| `shadow-spec.md` | Specification defining Project Shadow and Delta Shadow semantics |
 | `examples/PROJECT_SHADOW.example.md` | Reference example for structure and tone |
+| `deltas/` | Storage for append-only Delta Shadow history (per-repo) |
 
 ### Editor Adapters
 

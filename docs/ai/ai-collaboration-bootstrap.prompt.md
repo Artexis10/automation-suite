@@ -61,6 +61,7 @@ Attempt to locate the canonical source repository "automation-suite":
 If a path is provided or discovered, validate that these files exist:
 - <CANONICAL>/docs/ai/ai-contract.template.md
 - <CANONICAL>/docs/ai/windsurf-project-ruleset.template.md
+- <CANONICAL>/docs/ai/project-rules.template.md
 
 If validation passes:
 - Set PROVISIONING_MODE = CANONICAL
@@ -316,6 +317,123 @@ Do not modify any application code during this phase.
 
 ---
 
+PHASE 3.5 — PROJECT RULES INITIALIZATION
+
+Check if docs/ai/PROJECT_RULES.md exists.
+
+If it exists:
+- Output: "Project Rules already present. Reusing existing rules."
+- Do not modify it.
+
+If it does not exist:
+- If PROVISIONING_MODE = CANONICAL:
+  - Copy <CANONICAL_PATH>/docs/ai/project-rules.template.md to docs/ai/PROJECT_RULES.md.
+  - Output: "Project Rules created from canonical source. Customize for this repository."
+- If PROVISIONING_MODE = FALLBACK:
+  - Create docs/ai/PROJECT_RULES.md with the following embedded content:
+
+---BEGIN PROJECT_RULES.md---
+# Project Rules: <project-name>
+
+This document defines **authoritative operational policy** for this repository.
+
+It governs environment, tooling, testing, protected areas, and workflow constraints.
+It does NOT contain architectural invariants (those belong in `PROJECT_SHADOW.md`).
+It does NOT contain tool-adapter logic (that belongs in editor rulesets).
+
+AI collaborators must read and follow this document alongside `AI_CONTRACT.md` and `PROJECT_SHADOW.md`.
+
+---
+
+## 1. Scope and Authority
+
+This document is authoritative for:
+- Environment and configuration requirements
+- Build, runtime, and tooling contracts
+- Testing and verification expectations
+- Protected files and change boundaries
+- Git and workflow policy
+
+If this document conflicts with `AI_CONTRACT.md`, the AI Contract wins.
+If this document conflicts with `PROJECT_SHADOW.md` on architectural matters, the Shadow wins.
+
+---
+
+## 2. Protected Areas and Change Boundaries
+
+Files and directories that require explicit approval before modification:
+- <customize for this repository>
+
+Files that must never be modified by AI:
+- `.git/`
+- `docs/ai/` (governance artifacts)
+
+---
+
+## 3. Environment and Config Contract
+
+<customize for this repository>
+
+---
+
+## 4. Build / Runtime / Tooling Contract
+
+<customize for this repository>
+
+---
+
+## 5. State / Storage / Artifacts Contract
+
+<customize for this repository>
+
+---
+
+## 6. Testing and Verification Contract
+
+<customize for this repository>
+
+---
+
+## 7. External / CLI / API Contracts (if applicable)
+
+<customize for this repository>
+
+---
+
+## 8. Git and Tooling Policy
+
+- Do not create commits automatically unless explicitly requested
+- Do not push to remote
+- Do not modify `.git/` internals
+
+---
+
+## 9. References
+
+| Document | Purpose |
+|----------|---------|
+| `docs/ai/AI_CONTRACT.md` | AI behavior contract |
+| `docs/ai/PROJECT_SHADOW.md` | Architectural truth |
+| `docs/ai/PROJECT_RULES.md` | This document |
+| `docs/ai/deltas/` | Delta Shadow history |
+---END PROJECT_RULES.md---
+
+---
+
+PHASE 3.6 — DELTA SHADOW DIRECTORY INITIALIZATION
+
+Check if docs/ai/deltas/ directory exists.
+
+If it exists:
+- Output: "Delta Shadow directory already present."
+
+If it does not exist:
+- Create docs/ai/deltas/ directory.
+- Create docs/ai/deltas/.gitkeep (empty file to preserve directory in git).
+- Output: "Delta Shadow directory created."
+
+---
+
 PHASE 4 — FINALIZATION
 
 Output the following summary:
@@ -329,6 +447,8 @@ Files created or reused:
 - docs/ai/AI_CONTRACT.md — [created from canonical | created from fallback | reused]
 - .windsurf/rules/project-ruleset.md — [created from canonical | created from fallback | reused]
 - docs/ai/PROJECT_SHADOW.md — [created | reused]
+- docs/ai/PROJECT_RULES.md — [created from canonical | created from fallback | reused]
+- docs/ai/deltas/ — [created | already present]
 
 This repository is now sovereign. The provisioning source (automation-suite)
 is no longer required at runtime. All AI governance artifacts are self-contained.
@@ -348,6 +468,28 @@ Do not:
 - Continue with other tasks
 
 Bootstrap is complete.
+
+---
+
+TASK_CONTRACT TEMPLATE (FOR POST-BOOTSTRAP TASKS)
+
+After bootstrap, each task should include a TASK_CONTRACT block defining:
+
+TASK_CONTRACT:
+  Allowed files:
+    - <list of files/patterns this task may modify>
+  Forbidden files:
+    - docs/ai/*.md (governance artifacts)
+    - .git/
+    - <other protected paths from PROJECT_RULES.md>
+  Verification lane:
+    - <specific tests or checks to run>
+  Stop condition:
+    - <explicit criteria for task completion>
+  Commit rules:
+    - <whether AI may commit, or human commits>
+
+This block is prompt-level, not a repo file. It scopes each task explicitly.
 ```
 
 ---

@@ -26,6 +26,15 @@ If `docs/ai/PROJECT_SHADOW.md` does not exist and the task is architecture-sensi
 
 ---
 
+## Project Rules Authority
+
+If `docs/ai/PROJECT_RULES.md` exists:
+- Treat it as authoritative operational policy
+- Follow environment, tooling, and testing contracts
+- Respect protected areas and change boundaries
+
+---
+
 ## Scope
 
 - Make the smallest change that satisfies acceptance criteria
@@ -48,5 +57,7 @@ If file writes fail through normal tools:
 |----------|---------|
 | `docs/ai/AI_CONTRACT.md` | Authoritative behavior contract |
 | `docs/ai/PROJECT_SHADOW.md` | Architectural context (if present) |
+| `docs/ai/PROJECT_RULES.md` | Operational policy (if present) |
+| `docs/ai/deltas/` | Delta Shadow history |
 | `docs/ai/shadow-generator.prompt.md` | Generate new Project Shadow |
 | `docs/ai/shadow-delta-generator.prompt.md` | Generate Delta Shadow |

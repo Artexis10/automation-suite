@@ -82,3 +82,50 @@ A well-formed Project Shadow:
 - Contains no opinions, proposals, or speculation
 - Includes concrete examples where they add clarity
 - Identifies at least 2 invariants, 2 landmines, and 2 non-goals
+
+---
+
+## Delta Shadow Mechanism
+
+### What is a Delta Shadow
+
+A Delta Shadow is a discrete, append-only record of an architectural change that affects the Project Shadow. It captures the before/after state and provides an auditable trail of architectural evolution.
+
+### Storage Layout
+
+Delta Shadows are stored in:
+```
+docs/ai/deltas/YYYY-MM-DD-short-slug.md
+```
+
+Example filenames:
+- `2026-01-08-add-auth-subsystem.md`
+- `2026-01-15-remove-legacy-api.md`
+- `2026-02-01-new-invariant-idempotency.md`
+
+### When to Use Delta Shadow vs Direct Edit
+
+| Scenario | Action |
+|----------|--------|
+| Typo or formatting fix in Shadow | Edit `PROJECT_SHADOW.md` directly |
+| Clarification that doesn't change meaning | Edit `PROJECT_SHADOW.md` directly |
+| New invariant discovered | Create Delta Shadow, then merge |
+| Architecture boundary changed | Create Delta Shadow, then merge |
+| Landmine added or removed | Create Delta Shadow, then merge |
+| Non-goal added or removed | Create Delta Shadow, then merge |
+| Public API contract changed | Create Delta Shadow, then merge |
+
+### Append-Only Expectation
+
+Once a Delta Shadow is committed:
+- It is **never modified**
+- It serves as historical record
+- The merge into `PROJECT_SHADOW.md` is tracked separately
+
+### Delta Shadow Lifecycle
+
+1. **Generate** — AI or human creates Delta Shadow using `delta-shadow.template.md`
+2. **Review** — Human validates accuracy and approves
+3. **Commit** — Delta Shadow is committed to `docs/ai/deltas/`
+4. **Merge** — Changes are applied to `PROJECT_SHADOW.md`
+5. **Archive** — Delta remains in `deltas/` as permanent record

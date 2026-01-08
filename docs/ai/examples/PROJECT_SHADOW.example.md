@@ -151,3 +151,11 @@ datapipe run examples/simple.yaml
 - **Bug fixes:** Standard PR review by any maintainer
 
 Escalation: Open a GitHub Discussion for ambiguous cases.
+
+---
+
+## Delta Shadow History
+
+Architectural changes are tracked in `docs/ai/deltas/`. Each Delta Shadow is append-only and provides an auditable record of how this Shadow evolved.
+
+See `docs/ai/shadow-spec.md` for the Delta Shadow mechanism.
