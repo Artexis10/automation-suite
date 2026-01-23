@@ -62,7 +62,8 @@ provisioning/manifests/local/
 # Examples directory IS committed (shareable, sanitized manifests)
 # !provisioning/manifests/examples/
 
-# Autosuite state directory (local machine state, not committed)
+# Provisioning tool state directory (local machine state, not committed)
+# Used by the external provisioning tool (github.com/Artexis10/autosuite)
 .autosuite/
 
 # Output files (keep structure, not content)

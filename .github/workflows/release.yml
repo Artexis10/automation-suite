@@ -99,8 +99,7 @@ jobs:
             Copy-Item -Path "provisioning/manifests/includes" -Destination "$stagingDir/manifests/includes" -Recurse
           }
           
-          # Copy top-level entrypoint and docs
-          Copy-Item -Path "autosuite.ps1" -Destination $stagingDir
+          # Copy top-level docs
           Copy-Item -Path "README.md" -Destination $stagingDir
           Copy-Item -Path "VISION.md" -Destination $stagingDir
           
