@@ -63,7 +63,7 @@ provisioning/manifests/local/
 # !provisioning/manifests/examples/
 
 # Provisioning tool state directory (local machine state, not committed)
-# Used by the external provisioning tool (github.com/Artexis10/autosuite)
+# Used by the external provisioning tool (github.com/Artexis10/endstate)
 .autosuite/
 
 # Output files (keep structure, not content)

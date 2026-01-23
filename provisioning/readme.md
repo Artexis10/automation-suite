@@ -4,14 +4,14 @@
 
 ## New Location
 
-**[github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite)** — Standalone machine provisioning and configuration management tool.
+**[github.com/Artexis10/endstate](https://github.com/Artexis10/endstate)** — Standalone machine provisioning and configuration management tool.
 
 ## Migration
 
 ```powershell
 # Clone the new repository
-git clone https://github.com/Artexis10/autosuite.git
-cd autosuite  # the provisioning repository
+git clone https://github.com/Artexis10/endstate.git
+cd endstate  # the provisioning repository
 
 # Use the CLI
 .\cli.ps1 capture
@@ -30,4 +30,4 @@ This repository (`automation-suite`) continues to host:
 
 ---
 
-**For provisioning, use [github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite).**
+**For provisioning, use [github.com/Artexis10/endstate](https://github.com/Artexis10/endstate).**

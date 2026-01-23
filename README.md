@@ -12,7 +12,7 @@ A collection of automation tools and utilities for personal workflows.
 
 ## Note: Provisioning Has Moved
 
-The provisioning system has been split into a separate repository: **[github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite)**.
+The provisioning system has been split into a separate repository: **[github.com/Artexis10/endstate](https://github.com/Artexis10/endstate)**.
 
 ---
 

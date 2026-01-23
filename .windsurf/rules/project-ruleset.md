@@ -10,7 +10,7 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ## Important: Provisioning Has Moved
 
-**The provisioning system has been split into a separate repository: [github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite)**
+**The provisioning system has been split into a separate repository: [github.com/Artexis10/endstate](https://github.com/Artexis10/endstate)**
 
 This repository (`automation-suite`) now contains only:
 - Backup tools
