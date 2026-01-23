@@ -1,8 +1,12 @@
 # Automation Suite — Current State Architecture
 
+> **⚠️ HISTORICAL DOCUMENT** — This document describes the architecture of the provisioning system that has since been split into a separate repository ([github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite)). It is retained for historical reference only and does not reflect the current state of this repository.
+>
+> *Note: The name "Autosuite" was used during early development. It is deprecated and retained only for historical reference.*
+
 **Generated:** 2025-12-19  
 **Based on:** Code analysis of repository at commit time  
-**Purpose:** Factual description of what exists today, not proposals or plans
+**Purpose:** Historical reference — describes the provisioning system before it was split out
 
 ---
 

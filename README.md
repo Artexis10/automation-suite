@@ -12,7 +12,7 @@ A collection of automation tools and utilities for personal workflows.
 
 ## Note: Provisioning Has Moved
 
-The provisioning system is now maintained separately at **[Autosuite](https://github.com/Artexis10/autosuite)**.
+The provisioning system has been split into a separate repository: **[github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite)**.
 
 ---
 
@@ -110,7 +110,7 @@ Invoke-Pester -Configuration (& .\pester.config.ps1)
 |----------|-------------|
 | [TOOL-INDEX.md](TOOL-INDEX.md) | Complete index of all scripts |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development conventions |
-| [provisioning/README.md](provisioning/README.md) | Migration notice — provisioning moved to Autosuite |
+| [provisioning/README.md](provisioning/README.md) | Migration notice — provisioning moved to separate repository |
 
 ---
 

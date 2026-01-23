@@ -10,7 +10,7 @@ This ruleset governs development and operation of the Automation Suite repositor
 
 ## Important: Provisioning Has Moved
 
-**The provisioning system has been split into a standalone repository: [Autosuite](https://github.com/Artexis10/autosuite)**
+**The provisioning system has been split into a separate repository: [github.com/Artexis10/autosuite](https://github.com/Artexis10/autosuite)**
 
 This repository (`automation-suite`) now contains only:
 - Backup tools
@@ -30,7 +30,7 @@ automation-suite/
 ├── podcast-tools/          # Podcast production helpers
 ├── youtube-tools/          # YouTube content utilities
 ├── archive-setup/          # Environment and archive setup scripts
-├── provisioning/           # STUB ONLY - migration notice to Autosuite
+├── provisioning/           # STUB ONLY - migration notice to separate repo
 ├── scripts/                # Test runner scripts
 ├── tools/                  # Vendored dependencies (Pester)
 └── tests/                  # Pester tests
@@ -164,4 +164,4 @@ If any of the following change, update this ruleset in the same commit:
 - [README.md](../../README.md) - Project overview
 - [TOOL-INDEX.md](../../TOOL-INDEX.md) - Complete script index
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) - Development conventions
-- [provisioning/README.md](../../provisioning/README.md) - Migration notice to Autosuite
+- [provisioning/README.md](../../provisioning/README.md) - Migration notice to separate provisioning repo
