@@ -66,6 +66,9 @@ provisioning/manifests/local/
 # Used by the external provisioning tool (github.com/Artexis10/endstate)
 .autosuite/
 
+# oh-my-claudecode session state (local, not committed)
+.omc/
+
 # Output files (keep structure, not content)
 outputs/*.pdf
 outputs/*.docx
