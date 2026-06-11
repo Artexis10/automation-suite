@@ -105,7 +105,7 @@ function Resolve-PromotedGuids {
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
-        [Parameter(Mandatory = $true)][AllowNull()][AllowEmptyCollection()][string[]]$Promote,
+        [Parameter(Mandatory = $true)][AllowNull()][AllowEmptyCollection()][AllowEmptyString()][string[]]$Promote,
         [Parameter(Mandatory = $true)]$Catalog
     )
 
@@ -156,7 +156,7 @@ function Get-DesiredAsrState {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][ValidateSet('Audit', 'Enforce')][string]$Mode,
-        [Parameter(Mandatory = $true)][AllowNull()][AllowEmptyCollection()][string[]]$PromotedGuids,
+        [Parameter(Mandatory = $true)][AllowNull()][AllowEmptyCollection()][AllowEmptyString()][string[]]$PromotedGuids,
         [Parameter(Mandatory = $true)]$Catalog
     )
 
