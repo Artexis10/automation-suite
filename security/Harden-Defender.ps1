@@ -297,7 +297,7 @@ function Set-MpScalar {
         return
     }
     if ($WhatIfPreference) {
-        Write-Log "$Display: would change '$before' -> '$desiredStr' (WhatIf)" Change
+        Write-Log "${Display}: would change '$before' -> '$desiredStr' (WhatIf)" Change
         return
     }
 
@@ -306,14 +306,14 @@ function Set-MpScalar {
         Set-MpPreference @splat -ErrorAction Stop
         $after = "$((Get-MpPreference).$ParamName)"
         if ($after -ieq $desiredStr) {
-            Write-Log "$Display: '$before' -> '$after'" Change
+            Write-Log "${Display}: '$before' -> '$after'" Change
         }
         else {
-            Write-Log "$Display: attempted '$before' -> '$desiredStr' but reads '$after' (possibly blocked by Tamper Protection or managed policy)" Warn
+            Write-Log "${Display}: attempted '$before' -> '$desiredStr' but reads '$after' (possibly blocked by Tamper Protection or managed policy)" Warn
         }
     }
     catch {
-        Write-Log "$Display: failed ($($_.Exception.Message))" Error
+        Write-Log "${Display}: failed ($($_.Exception.Message))" Error
     }
 }
 

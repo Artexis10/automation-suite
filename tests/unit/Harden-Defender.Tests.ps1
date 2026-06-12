@@ -236,3 +236,20 @@ Describe "Resolve-PromotedGuids" {
         }
     }
 }
+
+Describe "Script file syntax" {
+    # The main script is never dot-sourced by tests (#Requires -RunAsAdministrator), so without
+    # this check a parse error in it would reach the host unseen. Parsing does not execute.
+    It "all security/*.ps1 files parse without errors" {
+        $files = @(Get-ChildItem -Path (Join-Path (Get-RepoRoot) "security") -Filter "*.ps1")
+        $files.Count | Should -BeGreaterThan 0
+
+        foreach ($f in $files) {
+            $parseTokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$parseTokens, [ref]$parseErrors)
+            $msgs = (@($parseErrors) | ForEach-Object { "L$($_.Extent.StartLineNumber) $($_.Message)" }) -join '; '
+            @($parseErrors).Count | Should -Be 0 -Because "$($f.Name) should parse cleanly ($msgs)"
+        }
+    }
+}
