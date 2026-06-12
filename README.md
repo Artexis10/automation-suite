@@ -24,6 +24,8 @@ automation-suite/
 ├── media-tools/      # Photo/video processing utilities
 ├── podcast-tools/    # Podcast production helpers
 ├── youtube-tools/    # YouTube content utilities
+├── devices/          # Hardware device management
+├── security/         # Host hardening (Microsoft Defender)
 ├── archive-setup/    # Environment setup scripts
 ├── tools/            # Shared utilities (vendored Pester)
 └── tests/            # Pester unit/integration tests
@@ -39,6 +41,8 @@ automation-suite/
 | `media-tools/` | Audio/video conversion (e.g., DTS→FLAC for Samsung TVs) |
 | `podcast-tools/` | Podcast folder structure export |
 | `youtube-tools/` | Live chat download and extraction |
+| `devices/` | Hardware device management (e.g., Cam Link 4K contention) |
+| `security/` | Microsoft Defender hardening (staged audit → enforce) |
 | `archive-setup/` | Archive folder skeleton initialization |
 
 See [TOOL-INDEX.md](TOOL-INDEX.md) for the complete script inventory.

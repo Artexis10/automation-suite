@@ -13,7 +13,8 @@ Complete index of all scripts in the automation-suite repository.
 | Podcast Tools | 1 | 1 implemented |
 | YouTube Tools | 2 | 2 implemented |
 | Setup | 1 | 1 stub |
-| **Total** | **9** | **5 implemented, 4 stubs** |
+| Security | 1 | 1 implemented |
+| **Total** | **10** | **6 implemented, 4 stubs** |
 
 ---
 
@@ -259,6 +260,40 @@ Complete index of all scripts in the automation-suite repository.
 
 ---
 
+## Security
+
+### Harden-Defender.ps1
+
+| Property | Value |
+|----------|-------|
+| **Path** | `security/Harden-Defender.ps1` |
+| **Status** | Implemented |
+| **Description** | Idempotent, reversible, staged (audit → enforce) Microsoft Defender hardening: 17 staged ASR rules, cloud baseline, CFA, opt-in LSA Protection. Source of truth for the host's Defender posture. |
+
+**Inputs:**
+- `-Mode Audit|Enforce`, `-PromoteRules`, `-EnableControlledFolderAccess`, `-MinimizeTelemetry`
+- `-EnableLSAProtection` / `-LSAProtectionUefiLock`, `-ExclusionPath`, `-ExclusionProcess`
+- `-Rollback <backup.json>`, `-OutputDirectory`, `-Transcript`, `-WhatIf`
+
+**Outputs:**
+- Applied Defender configuration (baseline, ASR, CFA, exclusions; LSA on opt-in)
+- Timestamped backup + Clixml snapshot under `%ProgramData%\DefenderHardening\backups`
+- Structured before→after log under `%ProgramData%\DefenderHardening\logs`
+
+**Dependencies:**
+- Windows 11, elevation, the built-in Defender PowerShell module
+- `security/Defender-Hardening.Helpers.ps1` (dot-sourced pure logic; unit-tested)
+
+**Example:**
+```powershell
+# Audit run (default), then enforce Phase 1, then promote reviewed Phase 2 rules
+.\Harden-Defender.ps1
+.\Harden-Defender.ps1 -Mode Enforce
+.\Harden-Defender.ps1 -Mode Enforce -PromoteRules BlockObfuscatedScripts,BlockPsexecWmiProcessCreation
+```
+
+---
+
 ## Quick Reference
 
 | Script | One-liner |
@@ -268,3 +303,4 @@ Complete index of all scripts in the automation-suite repository.
 | Export podcast tree | `.\ExportPodcastTree.ps1` |
 | Download chats (yt-dlp) | `.\download_chats_ytdlp.ps1` |
 | Download chats (chat_downloader) | `.\download_chats.ps1` |
+| Harden Defender (audit) | `.\security\Harden-Defender.ps1` |
