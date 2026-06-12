@@ -512,6 +512,10 @@ function Write-PostureReport {
         Reports (without changing) Tamper Protection, LSA Protection, HVCI / Memory Integrity,
         Credential Guard, and system Exploit Protection.
     #>
+    # Report-only function: suppress -WhatIf propagation locally so module auto-loads
+    # (e.g. CimCmdlets alias registration) don't emit "What if: Set Alias" noise.
+    $WhatIfPreference = $false
+
     Write-Log 'Security posture (report-only - not modified by this script)' Header
 
     try {
