@@ -289,27 +289,29 @@ function Set-MpScalar {
         [Parameter(Mandatory = $true)]$Prefs
     )
 
-    $before = "$($Prefs.$ParamName)"
-    $desiredStr = "$Desired"
+    # Get-MpPreference returns enum-typed settings as raw numeric codes while desired state is
+    # declared by enum name; ConvertTo-MpComparable canonicalizes both sides for comparison.
+    $beforeC = ConvertTo-MpComparable -ParamName $ParamName -Value $Prefs.$ParamName
+    $desiredC = ConvertTo-MpComparable -ParamName $ParamName -Value $Desired
 
-    if ($before -ieq $desiredStr) {
-        Write-Log "$Display already '$desiredStr'" Detail
+    if ($beforeC.Canonical -eq $desiredC.Canonical) {
+        Write-Log "$Display already '$($desiredC.Display)'" Detail
         return
     }
     if ($WhatIfPreference) {
-        Write-Log "${Display}: would change '$before' -> '$desiredStr' (WhatIf)" Change
+        Write-Log "${Display}: would change '$($beforeC.Display)' -> '$($desiredC.Display)' (WhatIf)" Change
         return
     }
 
     try {
         $splat = @{ $ParamName = $Desired }
         Set-MpPreference @splat -ErrorAction Stop
-        $after = "$((Get-MpPreference).$ParamName)"
-        if ($after -ieq $desiredStr) {
-            Write-Log "${Display}: '$before' -> '$after'" Change
+        $afterC = ConvertTo-MpComparable -ParamName $ParamName -Value (Get-MpPreference).$ParamName
+        if ($afterC.Canonical -eq $desiredC.Canonical) {
+            Write-Log "${Display}: '$($beforeC.Display)' -> '$($afterC.Display)'" Change
         }
         else {
-            Write-Log "${Display}: attempted '$before' -> '$desiredStr' but reads '$after' (possibly blocked by Tamper Protection or managed policy)" Warn
+            Write-Log "${Display}: attempted '$($beforeC.Display)' -> '$($desiredC.Display)' but reads '$($afterC.Display)' (possibly blocked by Tamper Protection or managed policy)" Warn
         }
     }
     catch {

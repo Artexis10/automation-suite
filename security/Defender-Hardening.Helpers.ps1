@@ -4,9 +4,10 @@
 
 .DESCRIPTION
     Host-independent logic extracted for testability: the Attack Surface Reduction (ASR) rule
-    catalog, action formatting, promotion resolution, and desired-state computation. These
-    functions contain no side effects, make no Defender / registry calls, and require no
-    elevation, so they can be dot-sourced and unit-tested in CI.
+    catalog, action formatting, promotion resolution, desired-state computation, and
+    Set-MpPreference enum value mapping. These functions contain no side effects, make no
+    Defender / registry calls, and require no elevation, so they can be dot-sourced and
+    unit-tested in CI.
 
     Dot-sourced by Harden-Defender.ps1 (which owns all host-mutating logic) and by
     tests/unit/Harden-Defender.Tests.ps1.
@@ -174,4 +175,72 @@ function Get-DesiredAsrState {
         else { $desired[$g] = 2 }
     }
     return $desired
+}
+
+function Get-MpEnumMap {
+    <#
+    .SYNOPSIS
+        Returns name -> numeric value maps for the enum-typed Set-MpPreference parameters this
+        tool manages. Values from the Microsoft Learn Set-MpPreference reference.
+
+    .DESCRIPTION
+        Get-MpPreference returns these properties as raw numeric codes while the tool declares
+        desired state by enum name; this map lets both sides be compared canonically.
+
+    .OUTPUTS
+        Hashtable: parameter name -> hashtable of enum name -> [int] value.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    return @{
+        PUAProtection                = @{ Disabled = 0; Enabled = 1; AuditMode = 2 }
+        MAPSReporting                = @{ Disabled = 0; Basic = 1; Advanced = 2 }
+        CloudBlockLevel              = @{ Default = 0; Moderate = 1; High = 2; HighPlus = 4; ZeroTolerance = 6 }
+        SubmitSamplesConsent         = @{ AlwaysPrompt = 0; SendSafeSamples = 1; NeverSend = 2; SendAllSamples = 3 }
+        EnableNetworkProtection      = @{ Disabled = 0; Enabled = 1; AuditMode = 2 }
+        EnableControlledFolderAccess = @{ Disabled = 0; Enabled = 1; AuditMode = 2; BlockDiskModificationOnly = 3; AuditDiskModificationOnly = 4 }
+    }
+}
+
+function ConvertTo-MpComparable {
+    <#
+    .SYNOPSIS
+        Normalizes a Set-MpPreference value (enum name or numeric code) for comparison and display.
+
+    .DESCRIPTION
+        For parameters in Get-MpEnumMap, an enum name or its numeric code both resolve to the
+        same canonical numeric string, with the enum name as the display form. Unknown
+        parameters and unknown values pass through (lowercased canonical, raw display).
+
+    .PARAMETER ParamName
+        The Set-MpPreference parameter name (e.g. 'PUAProtection').
+
+    .PARAMETER Value
+        The value to normalize: enum name string, numeric code, or anything stringifiable.
+
+    .OUTPUTS
+        Hashtable with:
+        - Canonical: string used for equality comparison.
+        - Display:   human-readable form (enum name where known).
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $true)][string]$ParamName,
+        [Parameter(Mandatory = $true)][AllowNull()][AllowEmptyString()]$Value
+    )
+
+    $valueStr = "$Value".Trim()
+    $maps = Get-MpEnumMap
+    if ($valueStr -ne '' -and $maps.ContainsKey($ParamName)) {
+        $map = $maps[$ParamName]
+        foreach ($name in $map.Keys) {
+            if ($name -ieq $valueStr -or "$($map[$name])" -eq $valueStr) {
+                return @{ Canonical = "$($map[$name])"; Display = $name }
+            }
+        }
+    }
+    return @{ Canonical = $valueStr.ToLowerInvariant(); Display = $valueStr }
 }

@@ -237,6 +237,71 @@ Describe "Resolve-PromotedGuids" {
     }
 }
 
+Describe "ConvertTo-MpComparable" {
+    Context "Enum name and numeric code resolve to the same canonical value" {
+        It "PUAProtection: 'Enabled' and 1 both canonicalize to '1'" {
+            (ConvertTo-MpComparable -ParamName 'PUAProtection' -Value 'Enabled').Canonical | Should -Be '1'
+            (ConvertTo-MpComparable -ParamName 'PUAProtection' -Value 1).Canonical | Should -Be '1'
+        }
+
+        It "MAPSReporting: 'Advanced' equals code 2 (audit-run false-warning regression)" {
+            $desired = ConvertTo-MpComparable -ParamName 'MAPSReporting' -Value 'Advanced'
+            $readBack = ConvertTo-MpComparable -ParamName 'MAPSReporting' -Value 2
+            $readBack.Canonical | Should -Be $desired.Canonical
+        }
+
+        It "CloudBlockLevel: 'High' equals code 2" {
+            (ConvertTo-MpComparable -ParamName 'CloudBlockLevel' -Value 'High').Canonical |
+                Should -Be (ConvertTo-MpComparable -ParamName 'CloudBlockLevel' -Value 2).Canonical
+        }
+
+        It "SubmitSamplesConsent: 'NeverSend' equals code 2" {
+            (ConvertTo-MpComparable -ParamName 'SubmitSamplesConsent' -Value 'NeverSend').Canonical |
+                Should -Be (ConvertTo-MpComparable -ParamName 'SubmitSamplesConsent' -Value '2').Canonical
+        }
+
+        It "EnableControlledFolderAccess: 'AuditMode' equals code 2" {
+            (ConvertTo-MpComparable -ParamName 'EnableControlledFolderAccess' -Value 'AuditMode').Canonical |
+                Should -Be (ConvertTo-MpComparable -ParamName 'EnableControlledFolderAccess' -Value 2).Canonical
+        }
+    }
+
+    Context "Display form" {
+        It "shows the enum name for a numeric code" {
+            (ConvertTo-MpComparable -ParamName 'EnableNetworkProtection' -Value 1).Display | Should -Be 'Enabled'
+        }
+
+        It "is case-insensitive on enum names" {
+            (ConvertTo-MpComparable -ParamName 'CloudBlockLevel' -Value 'high').Canonical | Should -Be '2'
+        }
+    }
+
+    Context "Pass-through behavior" {
+        It "passes through parameters without an enum map (CloudExtendedTimeout)" {
+            $r = ConvertTo-MpComparable -ParamName 'CloudExtendedTimeout' -Value 50
+            $r.Canonical | Should -Be '50'
+            $r.Display | Should -Be '50'
+        }
+
+        It "passes through unknown values for a mapped parameter" {
+            (ConvertTo-MpComparable -ParamName 'PUAProtection' -Value 'Bogus').Display | Should -Be 'Bogus'
+        }
+
+        It "handles null and empty values" {
+            (ConvertTo-MpComparable -ParamName 'PUAProtection' -Value $null).Canonical | Should -Be ''
+            (ConvertTo-MpComparable -ParamName 'PUAProtection' -Value '').Canonical | Should -Be ''
+        }
+    }
+}
+
+Describe "Get-MpEnumMap" {
+    It "covers exactly the enum-typed baseline parameters the tool manages" {
+        $map = Get-MpEnumMap
+        $expected = @('PUAProtection', 'MAPSReporting', 'CloudBlockLevel', 'SubmitSamplesConsent', 'EnableNetworkProtection', 'EnableControlledFolderAccess')
+        (@($map.Keys) | Sort-Object) -join ',' | Should -Be (($expected | Sort-Object) -join ',')
+    }
+}
+
 Describe "Script file syntax" {
     # The main script is never dot-sourced by tests (#Requires -RunAsAdministrator), so without
     # this check a parse error in it would reach the host unseen. Parsing does not execute.
